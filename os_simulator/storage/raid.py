@@ -127,11 +127,12 @@ class RAIDController(ABC):
 
     def format_status(self) -> str:
         """Format detailed status report for CLI diagnostics."""
+        lvl_label = self.level.value.replace("_", " ")
         lines = [
             "======================================================================",
-            f"                     DIAGNÓSTICO DO ARRANJO {self.level.value}",
+            f"                     DIAGNÓSTICO DO ARRANJO {lvl_label}",
             "======================================================================",
-            f"Nível RAID                   : {self.level.value}",
+            f"Nível RAID                   : {lvl_label}",
             f"Estado do Arranjo            : {self.status.value}",
             f"Total de Discos Membros      : {self.num_disks} discos",
             f"Discos Operacionais (Online) : {self.online_disks_count} discos",

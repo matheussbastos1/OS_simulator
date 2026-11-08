@@ -86,6 +86,10 @@ class SSDDevice:
             for i in range(self.physical_capacity)
         ]
 
+    def set_wear_mode(self, mode: WearLevelingMode) -> None:
+        """Switch wear leveling mode dynamically."""
+        self.wear_mode = mode
+
     def _validate_lba(self, lba: int) -> None:
         if not (0 <= lba < self.logical_capacity):
             raise IndexError(
@@ -188,6 +192,8 @@ class SSDDevice:
             "std_dev_wear": round(std_dev, 2),
             "wear_map": wear_counts,
         }
+
+    get_wear_statistics = get_wear_stats
 
     def format_wear_report(self) -> str:
         """Format human-readable diagnostic report for SSD wear leveling."""

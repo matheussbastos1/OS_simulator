@@ -78,6 +78,11 @@ class DiskScheduler(ABC):
         self.max_track = max_track
         self.direction = direction
 
+    @property
+    def name(self) -> str:
+        """Name of the scheduling algorithm."""
+        return self.__class__.__name__.replace("Scheduler", "")
+
     def set_head(self, track: int) -> None:
         """Update current head position."""
         self.current_head = track
