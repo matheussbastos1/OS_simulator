@@ -72,46 +72,164 @@
 
 ---
 
-### 2.6. `login`
-- **Sintaxe Oficial:** `login --user <username>`
-- **Exemplo do Professor:** `login --user carlos`
-- **Parâmetros Obrigatórios:** `--user <username>`. *Alias aceito:* `login <username>`.
-- **Parâmetros Opcionais:** `--password <senha>` (se omitido, solicita senha via prompt oculto no terminal).
-- **Pré-condições:** Usuário cadastrado no simulador.
-- **Subsistema:** `security.auth`.
-- **Saída de Sucesso:** Sessão atualizada para o usuário e evento no `AuditLog`.
+### 2.6. `io_status`
+- **Sintaxe Oficial:** `io_status`
+- **Exemplo:** `io_status`
+- **Subsistema:** `io` (`IOManager`).
+- **Finalidade:** Exibir métricas operacionais do subsistema de E/S, total de leituras/escritas, número de requisições pendentes, posição atual do cabeçote e total de trilhas percorridas.
+- **Exemplo de Saída:**
+  ```text
+  ======================================================================
+                       DIAGNÓSTICO DO SUBSISTEMA DE E/S
+  ======================================================================
+  Escalonador Ativo            : SSTFScheduler
+  Posição Atual da Cabeça      : Trilha 53
+  Dispositivo de Armazenamento : RAID5Controller
+  Total de Operações de Leitura: 12
+  Total de Operações de Escrita: 8
+  Total de Requisições de E/S  : 20
+  Total de Trilhas Percorridas : 208 trilhas
+  Requisições Pendentes na Fila: 0
+  ======================================================================
+  ```
 
 ---
 
-### 2.7. `chmod`
-- **Sintaxe Oficial:** `chmod <mascara_octal> <caminho>`
-- **Exemplo:** `chmod 750 /sistema/config.sys`
-- **Parâmetros Obrigatórios:** `<mascara_octal>` (3 dígitos octais de `000` a `777`), `<caminho>`.
-- **Pré-condições:** Usuário solicitante deve ser o proprietário ou `root`.
-- **Subsistema:** `security.acl`.
-- **Saída de Sucesso:** Atualização da ACL do i-node.
+### 2.7. `io_scheduler`
+- **Sintaxe Oficial:** `io_scheduler [--set <fcfs|sstf|scan|cscan>]`
+- **Exemplos:**
+  - `io_scheduler` (consulta o escalonador corrente e posição da cabeça)
+  - `io_scheduler --set scan` (comuta dinamicamente para o algoritmo SCAN)
+  - `io_scheduler cscan` (comuta utilizando sintaxe posicional)
+- **Subsistema:** `io.scheduler`.
+- **Saída de Sucesso:**
+  ```text
+  Escalonador de disco alterado com sucesso para: SCAN
+  ```
 
 ---
 
-### 2.8. `encrypt_file`
-- **Sintaxe Oficial:** `encrypt_file <caminho_arquivo> --key "<chave>"`
-- **Exemplo do Professor:** `encrypt_file /home/carlos/segredo.txt --key "MinhaChave123"`
-- **Parâmetros Obrigatórios:** `<caminho_arquivo>`, `--key "<chave>"`.
-- **Pré-condições:** Arquivo existente, usuário com permissão de escrita/proprietário.
-- **Subsistema:** `security.crypto` (AES-256-GCM com nonce de 12 bytes e tag de 16 bytes).
-- **Saída de Sucesso:** Cifragem da carga útil nos blocos e atualização da flag `is_encrypted` no i-node.
+### 2.8. `io_benchmark`
+- **Sintaxe Oficial:** `io_benchmark [--algorithm <fcfs|sstf|scan|cscan>] [--queue <t1,t2,...>] [--head <pos>]`
+- **Exemplos:**
+  - `io_benchmark --algorithm sstf --queue 98,183,37,122,14 --head 53` (executa simulação isolada)
+  - `io_benchmark --queue 98,183,37,122,14 --head 53` (benchmark comparativo de todos os 4 algoritmos)
+- **Subsistema:** `io.scheduler`.
+- **Exemplo de Saída Comparativa:**
+  ```text
+  ========================================================================================
+                       BENCHMARK COMPARATIVO DE ESCALONAMENTO DE DISCO
+  ========================================================================================
+  Posição Inicial da Cabeça : Trilha 53
+  Fila de Requisições       : [98, 183, 37, 122, 14] (5 requisições)
+  ----------------------------------------------------------------------------------------
+  Algoritmo  Ordem de Atendimento                   Deslocamento (Trilhas)    Média/Req
+  ----------------------------------------------------------------------------------------
+  FCFS       [98, 183, 37, 122, 14]                 469                       93.80
+  SSTF       [37, 14, 98, 122, 183]                 208                       41.60
+  SCAN       [98, 122, 183, 199, 37, 14]            331                       66.20
+  C-SCAN     [98, 122, 183, 199, 0, 14, 37]         382                       76.40
+  ========================================================================================
+  Melhor Desempenho         : SSTF com 208 trilhas percorridas (média 41.60/req)
+  ========================================================================================
+  ```
 
 ---
 
-### 2.9. `antivirus_scan`
-- **Sintaxe Oficial:** `antivirus_scan [<caminho_base>]`
-- **Exemplo do Professor:** `antivirus_scan /`
-- **Parâmetros Opcionais:** `<caminho_base>` (padrão: `/`).
-- **Subsistema:** `security.integrity`.
-- **Saída de Sucesso:** Relatório de varredura de integridade (SHA-256 com verificação de assinatura HMAC do Kernel) e detecção de padrões maliciosos simulados.
+### 2.9. `ssd_status`
+- **Sintaxe Oficial:** `ssd_status [--mode <none|dynamic|static>]`
+- **Exemplos:**
+  - `ssd_status` (diagnóstico de ciclos e FTL)
+  - `ssd_status --mode static` (altera a política de nivelamento para estática)
+- **Subsistema:** `io.ssd` (`SSDDevice`).
+- **Exemplo de Saída:**
+  ```text
+  ======================================================================
+                  DIAGNÓSTICO DE WEAR LEVELING DO SSD
+  ======================================================================
+  Política Ativa               : DYNAMIC
+  Capacidade Lógica (LBAs)     : 16 blocos
+  Capacidade Física Total (PBAs: 20 blocos (Overprovisioning: 4)
+  Total de Ciclos de Escrita   : 25 escritas
+  Desgaste Mínimo / Máximo     : 1 / 2 ciclos
+  Desgaste Médio               : 1.25 ciclos/bloco
+  Desvio Padrão do Desgaste    : 0.43 (menor = melhor distribuição)
+  ----------------------------------------------------------------------
+  Mapa de Ciclos de Escrita por Bloco Físico (PBA):
+  [00: 1] [01: 2] [02: 1] [03: 1] [04: 1] [05: 2] [06: 1] [07: 1]
+  [08: 1] [09: 2] [10: 1] [11: 1] [12: 1] [13: 2] [14: 1] [15: 1]
+  [16: 1] [17: 2] [18: 1] [19: 1]
+  ======================================================================
+  ```
 
 ---
 
+### 2.10. `raid_status`
+- **Sintaxe Oficial:** `raid_status`
+- **Exemplo:** `raid_status`
+- **Subsistema:** `storage.raid` (`RAIDController`).
+- **Exemplo de Saída:**
+  ```text
+  ======================================================================
+                       DIAGNÓSTICO DO ARRANJO RAID 5
+  ======================================================================
+  Nível RAID                   : RAID 5
+  Estado do Arranjo            : OPTIMAL
+  Total de Discos Membros      : 4 discos
+  Discos Operacionais (Online) : 4 discos
+  Discos Falhos (Offline)      : 0 discos
+  Capacidade de Cada Disco     : 8 blocos (32 KB)
+  Capacidade Útil Total (LBA)  : 24 blocos (96 KB)
+  ----------------------------------------------------------------------
+  Discos Físicos do Arranjo:
+    Disco 00: ONLINE [OK] | Leituras: 5 | Escritas: 3
+    Disco 01: ONLINE [OK] | Leituras: 4 | Escritas: 3
+    Disco 02: ONLINE [OK] | Leituras: 6 | Escritas: 3
+    Disco 03: ONLINE [OK] | Leituras: 5 | Escritas: 3
+  ======================================================================
+  ```
+
+---
+
+### 2.11. `raid_fail`
+- **Sintaxe Oficial:** `raid_fail --disk <id_disco>`
+- **Exemplo:** `raid_fail --disk 1` (ou posicional: `raid_fail 1`)
+- **Subsistema:** `storage.raid`.
+- **Efeito:** Marca o disco especificado como offline e altera o estado do arranjo para `DEGRADED` (ou `FAILED` se a tolerância for excedida).
+- **Exemplo de Saída:**
+  ```text
+  [RAID] Falha física injetada com sucesso no Disco #01.
+  Estado atual do arranjo: DEGRADED
+  ```
+
+---
+
+### 2.12. `raid_rebuild`
+- **Sintaxe Oficial:** `raid_rebuild --disk <id_disco>`
+- **Exemplo:** `raid_rebuild --disk 1` (ou posicional: `raid_rebuild 1`)
+- **Subsistema:** `storage.raid`.
+- **Efeito:** Reconstrói integralmente os dados do disco substituído através do cálculo XOR dos discos sobreviventes e restaura o arranjo para `OPTIMAL`.
+- **Exemplo de Saída:**
+  ```text
+  [RAID] Reconstrução dos dados do Disco #01 concluída com sucesso.
+  Estado atual do arranjo: OPTIMAL
+  ```
+
+---
+
+### 2.13. `raid_init`
+- **Sintaxe Oficial:** `raid_init --level <0|1|4|5> [--disks <n>] [--capacity <tam>]`
+- **Exemplo:** `raid_init --level 1 --disks 2 --capacity 8`
+- **Subsistema:** `storage.raid` (`RAIDFactory`).
+- **Efeito:** Inicializa um novo arranjo RAID e reconecta o `IOBlockDeviceAdapter` e o `FileSystemService`.
+- **Exemplo de Saída:**
+  ```text
+  Arranjo RAID 1 inicializado com sucesso (2 discos, capacidade útil: 8 blocos).
+  ```
+
+---
+
+### 2.14. `login`
 ### 2.10. `create_process`
 - **Sintaxe Oficial:** `create_process --name "<nome>" --size <tamanho> --type <critical|normal>`
 - **Exemplos do Professor:**

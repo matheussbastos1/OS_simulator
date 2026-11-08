@@ -84,29 +84,54 @@ Para garantir integridade contra falhas de espaço em disco e evitar perda de da
 ## 2. SUBSISTEMA DE ENTRADA E SAÍDA (I/O) E ARMAZENAMENTO (ETAPA 2)
 
 ### 2.1. Escalonamento Mecânico de Disco (HDD)
-- **FCFS:** Atendimento estrito na ordem de chegada da fila.
-- **SSTF (Shortest Seek Time First):** A partir da posição atual do cabeçote, atende a requisição mais próxima:
+Os algoritmos de escalonamento atuam sobre a fila de `IORequest` para minimizar a métrica de *Seek Time* (deslocamento de trilhas).
+- **FCFS (First-Come, First-Served):**
+  Atendimento sequencial por ordem de chegada na fila:
+  $$\text{Deslocamento Total} = \sum_{i=1}^{m} |\text{track}_i - \text{track}_{i-1}|$$
+- **SSTF (Shortest Seek Time First):**
+  Seleciona guloso a requisição com menor distância absoluta da posição corrente do cabeçote:
   $$R^* = \arg\min_{R \in \text{Fila}} |\text{track}(R) - \text{cabeçote\_atual}|$$
-  *Validação Oficial IO-001:* Início trilha 53, fila `[98, 183, 37, 122, 14]`. Percurso: $53 \to 37 \to 14 \to 98 \to 122 \to 183$. Total: $16 + 23 + 84 + 24 + 61 = 208\text{ trilhas}$.
-- **SCAN (Elevador):** Deslocamento unidirecional até o limite da unidade atendendo requisições, inversão de sentido e atendimento do sentido oposto.
-- **C-SCAN (Circular SCAN):** Deslocamento unidirecional até a borda; salto imediato para o início oposto sem atender requisições no retorno.
+  *Critério de Desempate Determinístico (Ground Truth):* Em caso de empate na distância, atende primeiro a requisição com menor número de trilha; persistindo o empate, segue a ordem original de chegada.
+  *Cenário Homologado IO-001:* Cabeçote inicial em 53, fila `[98, 183, 37, 122, 14]`.
+  Sequência de atendimento: $53 \to 37 \to 14 \to 98 \to 122 \to 183$.
+  Deslocamentos parciais: $|37-53|=16$, $|14-37|=23$, $|98-14|=84$, $|122-98|=24$, $|183-122|=61$.
+  Deslocamento total acumulado: $16 + 23 + 84 + 24 + 61 = 208\text{ trilhas}$.
+- **SCAN (Elevador):**
+  O braço move-se em um sentido (padrão: crescente `UP`) atendendo todas as requisições no caminho até atingir a borda do disco (`max_track = 199`). Ao atingir o limite, inverte a direção (`DOWN`) e atende as requisições pendentes no sentido oposto.
+- **C-SCAN (Circular SCAN):**
+  Semelhante ao SCAN, mas atende requisições apenas no sentido crescente. Ao atingir a borda final (`max_track`), executa um salto direto de retorno para o início oposto (`min_track = 0`) sem atender requisições durante o percurso de retorno, proporcionando tempo de espera mais uniforme.
 
-### 2.2. SSD e Wear Leveling
-- Mantém contador de escritas por bloco físico: `write_cycles[block_id]`.
-- Ao gravar, prioriza blocos livres com menor contador de desgaste.
-- Caso a diferença $(\max(\text{write\_cycles}) - \min(\text{write\_cycles})) > \text{limiar}$, aciona *Wear Leveling Estático*, migrando dados frios para blocos desgastados e liberando blocos novos para gravações frequentes.
+---
+
+### 2.2. Simulação de SSD e Wear Leveling
+A camada Flash Translation Layer (FTL) desacopla o endereço lógico (LBA) do bloco físico (PBA).
+- **Modo NONE:** Mapeamento direto (LBA $i 	o$ PBA $i$). Causa concentração prematura de desgaste em blocos de escrita intensa.
+- **Modo DYNAMIC (Wear Leveling Dinâmico):**
+  Ao gravar em um LBA, o bloco físico atual é invalidado (`is_valid = False`, `is_free = True`), e um novo bloco físico livre com o **menor contador de ciclos de escrita** (`write_count`) é selecionado.
+- **Modo STATIC (Wear Leveling Estático):**
+  Além da política dinâmica, se $(\max(\text{write\_count}) - \min(\text{write\_count})) > \text{static\_threshold}$, o controlador identifica dados frios (pouco modificados que residem em blocos de baixo desgaste) e move-os para blocos mais desgastados, liberando os blocos mais conservados para novas escritas dinâmicas.
+- **Métricas Estatísticas:**
+  $$\text{Média} = \frac{1}{N} \sum_{i=0}^{N-1} w_i, \quad \sigma = \sqrt{\frac{1}{N} \sum_{i=0}^{N-1} (w_i - \text{Média})^2}$$
+  O desvio padrão ($\sigma$) mede formalmente a uniformidade da distribuição do desgaste entre as células de memória flash.
+
+---
 
 ### 2.3. Controladores RAID e Reconstrução XOR
-- **RAID 0:** Striping puro sem redundância.
-- **RAID 1:** Espelhamento puro.
-- **RAID 4:** Striping de dados com disco dedicado de paridade XOR.
-- **RAID 5:** Striping de dados com paridade distribuída e rotativa entre $N$ discos.
+- **RAID 0 (Striping):**
+  Distribui dados entre $N$ discos sem redundância. LBA $i$ mapeia para Disco $d = i \pmod N$, Bloco $b = \lfloor i / N \rfloor$. Eficiência $= 100\%$. Falha de 1 disco inutiliza o arranjo.
+- **RAID 1 (Mirroring):**
+  Grava réplicas idênticas em $N$ discos ($N \ge 2$). Eficiência $= 1/N$. Sobrevive à falha de até $N-1$ discos.
+- **RAID 4 (Dedicated Parity):**
+  Striping em $N-1$ discos de dados e paridade dedicada no disco $N-1$.
+- **RAID 5 (Distributed Parity):**
+  Striping com rotação de paridade esquerda-simétrica entre faixas (*stripes*). Para a faixa $s = \lfloor i / (N-1) \rfloor$, o disco de paridade é $p = (N - 1) - (s \pmod N)$. Os dados da faixa ocupam os demais $N-1$ discos. Eficiência $= (N-1)/N$.
 - **Cálculo da Paridade XOR:**
-  Para blocos de $K$ bytes, a paridade é calculada byte a byte:
+  Para cada byte $j$ do bloco (0 a $4095$):
   $$P[j] = D_0[j] \oplus D_1[j] \oplus \dots \oplus D_{N-2}[j]$$
-- **Reconstrução On-The-Fly (Rebuild):**
-  Se o Disco $k$ falhar, o bloco ausente $D_k$ é recuperado em tempo real pelo XOR dos blocos sobreviventes da faixa com o bloco de paridade:
-  $$D_k[j] = P[j] \oplus \bigoplus_{m \neq k} D_m[j]$$
+- **Reconstrução On-The-Fly e Rebuild:**
+  Com 1 disco offline em RAID 5 (estado `DEGRADED`), leituras no disco falho reconstroem os dados em tempo real:
+  $$D_{\text{falho}}[j] = P[j] \oplus \bigoplus_{m \neq \text{falho}} D_m[j]$$
+  O comando `rebuild_disk` restaura fisicamente os dados de todos os blocos do disco participante e restabelece o status `OPTIMAL`.
 
 ---
 

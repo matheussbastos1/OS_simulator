@@ -120,24 +120,25 @@ Cada etapa segue rigorosamente:
 **Branch:** `feature/etapa-2-io-raid`  
 **Objetivo:** Construir a camada de gerenciamento de requisições de E/S (`IORequest`), algoritmos de escalonamento de braço de disco magnético, simulação de SSD com Wear Leveling e arranjos redundantes de discos (RAID 0, 1, 4 e 5), substituindo o adaptador `InMemoryBlockDevice` pelo `IOManager` via `BlockDevicePort`.
 
-- [ ] Integrar operações de leitura e escrita do `FileSystemService` ao subsistema de `IOManager` via `BlockDevicePort`.
-- [ ] Implementar a abstração `IORequest` com atributos de bloco alvo, trilha, tipo (leitura/escrita) e prioridade.
-- [ ] Implementar fila de requisições e a classe base `DiskScheduler`.
-- [ ] Implementar o algoritmo de escalonamento FCFS (First-Come, First-Served).
-- [ ] Implementar o algoritmo de escalonamento SSTF (Shortest Seek Time First) com cálculo de deslocamento total de trilhas.
-- [ ] Implementar o algoritmo de escalonamento SCAN (Elevator).
-- [ ] Implementar o algoritmo de escalonamento C-SCAN (Circular SCAN).
-- [ ] Implementar a abstração `SSDController` com matriz de desgaste e algoritmo de *Wear Leveling* dinâmico.
-- [ ] Implementar a abstração `PhysicalDisk` em memória, simulando múltiplos discos independentes e posse de `DiskBlock`.
-- [ ] Implementar arranjo RAID 0 (Striping puro).
-- [ ] Implementar arranjo RAID 1 (Mirroring puro).
-- [ ] Implementar arranjo RAID 4 (Striping com disco de paridade dedicado).
-- [ ] Implementar arranjo RAID 5 (Striping com paridade distribuída e rotação).
-- [ ] Implementar o cálculo de paridade XOR bit a bit / byte a byte entre blocos.
-- [ ] Implementar mecanismo de injeção de falha física em disco e algoritmo de reconstrução on-the-fly (`rebuild`).
-- [ ] Implementar saídas de diagnóstico de E/S e estado de saúde dos discos na CLI.
-- [ ] Validar e homologar os cenários determinísticos `IO-001` e `IO-002` do `tests/GROUND_TRUTH.md`.
-- [ ] Consolidar commits e integrar à `dev`.
+- [x] Integrar operações de leitura e escrita do `FileSystemService` ao subsistema de `IOManager` via `BlockDevicePort`.
+- [x] Implementar a abstração `IORequest` com atributos de bloco alvo, trilha, tipo (leitura/escrita) e prioridade (`Incremento 1`).
+- [x] Implementar fila de requisições `IOQueue` e a classe base `DiskScheduler` (`Incremento 1`).
+- [x] Implementar o algoritmo de escalonamento FCFS (First-Come, First-Served) (`Incremento 2`).
+- [x] Implementar o algoritmo de escalonamento SSTF (Shortest Seek Time First) com cálculo de deslocamento total de trilhas e desempate determinístico (`Incremento 2`).
+- [x] Implementar o algoritmo de escalonamento SCAN (Elevator) (`Incremento 2`).
+- [x] Implementar o algoritmo de escalonamento C-SCAN (Circular SCAN) com retorno sem atendimento (`Incremento 2`).
+- [x] Implementar a simulação de SSD (`SSDDevice`), blocos físicos (`SSDBlock`), camada FTL e algoritmos de *Wear Leveling* dinâmico e estático (`Incremento 3`).
+- [x] Implementar a abstração `PhysicalDisk` em memória, simulando múltiplos discos independentes, trilhas, setores e posse de `DiskBlock` (`Incremento 4`).
+- [x] Implementar arranjo RAID 0 (Striping puro) (`Incremento 4`).
+- [x] Implementar arranjo RAID 1 (Mirroring puro com espelhamento transparente) (`Incremento 4`).
+- [x] Implementar arranjo RAID 4 (Striping com disco de paridade dedicado) (`Incremento 4`).
+- [x] Implementar arranjo RAID 5 (Striping com paridade distribuída rotativa esquerda-simétrica) (`Incremento 4`).
+- [x] Implementar o cálculo de paridade XOR byte a byte entre blocos (`Incremento 4`).
+- [x] Implementar mecanismo de injeção de falha física em disco (`fail()`) e algoritmo de reconstrução *on-the-fly* e regeneração (`rebuild_disk`) (`Incremento 4`).
+- [x] Implementar o adaptador `IOBlockDeviceAdapter` conectando o `FileSystemService` ao `IOManager` e arranjos RAID (`Incremento 5`).
+- [x] Implementar comandos interativos na CLI (`io_status`, `io_scheduler`, `io_benchmark`, `ssd_status`, `raid_status`, `raid_fail`, `raid_rebuild`, `raid_init`) (`Incremento 6`).
+- [x] Validar e homologar os cenários determinísticos `IO-001` (SSTF 208 trilhas) e `IO-002` (RAID 5 XOR) do `tests/GROUND_TRUTH.md` (`Incremento 7`).
+- [x] Consolidar commits incrementais via Conventional Commits e preparar branch para validação (`Incremento 7`).
 
 ---
 
@@ -188,6 +189,6 @@ Cada etapa segue rigorosamente:
 | `v0.1.0` | Fase 0 | Fundação Arquitetural, Governança Git e Especificações | Concluído |
 | `v0.1.1` | Fase 0.1 | Revisão de Consistência, Portas/Adaptadores e Alinhamento CLI | Concluído |
 | `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação via Adaptador em Memória | Concluído |
-| `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Não iniciado |
+| `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Concluído (Pronto para Homologação) |
 | `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Não iniciado |
 | `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Não iniciado |
