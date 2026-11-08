@@ -61,6 +61,24 @@ class TestStorageAndInode(unittest.TestCase):
         with self.assertRaises(DiskFullException):
             device.allocate_block()
 
+    def test_is_block_free_and_allocate_specific_blocks(self):
+        device = InMemoryBlockDevice(capacity=5)
+        self.assertTrue(device.is_block_free(0))
+        self.assertTrue(device.is_block_free(4))
+        self.assertFalse(device.is_block_free(5))  # out of bounds
+
+        allocated = device.allocate_specific_blocks([1, 2, 3])
+        self.assertEqual(allocated, [1, 2, 3])
+        self.assertFalse(device.is_block_free(1))
+        self.assertFalse(device.is_block_free(2))
+        self.assertFalse(device.is_block_free(3))
+        self.assertTrue(device.is_block_free(0))
+        self.assertTrue(device.is_block_free(4))
+
+        # Re-allocating an already allocated block must raise DiskFullException
+        with self.assertRaises(DiskFullException):
+            device.allocate_specific_blocks([2])
+
     def test_inode_internal_fragmentation(self):
         """Scenario FS-002 calculation verification."""
         inode = Inode(

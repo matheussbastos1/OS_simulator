@@ -197,7 +197,12 @@ Total de i-nodes             : 128 (Ocupados: 6 | Livres: 122)
 Espaço Ocupado pelos Dados   : 124.928 bytes
 Sobrecarga de Metadados      : 24.576 bytes
 Fragmentação Interna Total   : 6.144 bytes
-Fragmentação Externa (Geral) : 0 bytes (disco sem fragmentação restritiva)
+Fragmentação Externa (Geral) : 0 bytes (maior contíguo: 986 blocos)
+======================================================================
+
+[MAPA DE OCUPAÇÃO DOS BLOCOS]
+[00:I] [01:D] [02:D] [03:D] [04:.] [05:.] [06:.] [07:.]
+Legenda: . = Livre, D = Dados, I = Índice, X = Danificado
 ======================================================================
 ```
 

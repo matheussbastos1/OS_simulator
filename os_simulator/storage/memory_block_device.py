@@ -35,6 +35,12 @@ class InMemoryBlockDevice(BlockDevicePort):
             return False
         return self.blocks[block_id].block_status != BlockStatus.BAD
 
+    def is_block_free(self, block_id: int) -> bool:
+        """Check if block_id is within bounds and currently FREE."""
+        if not (0 <= block_id < self.capacity):
+            return False
+        return self.blocks[block_id].block_status == BlockStatus.FREE
+
     def get_block(self, block_id: int) -> DiskBlock:
         """Direct access to DiskBlock object (internal to storage layer)."""
         self._validate_block_id(block_id)
@@ -74,6 +80,26 @@ class InMemoryBlockDevice(BlockDevicePort):
             self.blocks[block_id].owner_inode = owner_inode
             allocated.append(block_id)
         return allocated
+
+    def allocate_specific_blocks(self, block_ids: List[int], owner_inode: Optional[int] = None) -> List[int]:
+        """Allocate specific block IDs. Roll back if any is unavailable."""
+        if not block_ids:
+            return []
+
+        # Validate bounds and availability for all requested blocks
+        for b_id in block_ids:
+            self._validate_block_id(b_id)
+            if self.blocks[b_id].block_status != BlockStatus.FREE:
+                raise DiskFullException(
+                    f"Bloco {b_id} não está disponível para alocação (status atual: {self.blocks[b_id].block_status.value})."
+                )
+
+        # Allocate all requested blocks
+        for b_id in block_ids:
+            self.blocks[b_id].block_status = BlockStatus.ALLOCATED
+            self.blocks[b_id].owner_inode = owner_inode
+
+        return block_ids
 
     def free_block(self, block_id: int) -> None:
         """Release allocated block back to free pool."""

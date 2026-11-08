@@ -64,6 +64,24 @@
 
 ---
 
+### Cenário FS-004: Atomicidade e Transacionalidade de Gravação (write_file)
+- **Identificador:** `FS-004`
+- **Etapa:** 1 (Sistema de Arquivos)
+- **Preparação do Estado:** Disco simulado de 8 blocos com arquivo existente ocupando dados.
+- **Comando Executado:**
+  ```bash
+  write_file /sistema/dados.log "<payload_que_excede_a_capacidade_do_disco>"
+  ```
+- **Resultado Esperado:**
+  1. A operação falha levantando `DiskFullException`.
+  2. O conteúdo anterior do arquivo permanece 100% intacto e legível via `read_file`.
+  3. O i-node retém seus metadados (`file_size`, `allocated_blocks`, `index_block_id`) consistentes com o estado pré-falha.
+  4. Nenhum bloco fica órfão ou duplamente alocado no dispositivo (`BlockDevicePort`).
+  5. Válido e verificado para as três estratégias (`ContiguousAllocation`, `LinkedFATAllocation`, `IndexedAllocation`).
+- **Critério de Aprovação:** Dados lidos após a falha de escrita coincidem perfeitamente com os dados originais e contadores de blocos livres do dispositivo são preservados.
+
+---
+
 ## 2. CENÁRIOS DA ETAPA 2 — ENTRADA E SAÍDA E RAID
 
 ### Cenário IO-001: Escalonamento de Disco SSTF

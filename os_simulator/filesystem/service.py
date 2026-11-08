@@ -275,23 +275,38 @@ class FileSystemService:
         if details:
             lines.append("\n[MAPA DE OCUPAÇÃO DOS BLOCOS]")
             blocks_row: List[str] = []
+
+            # Determine real allocation state from filesystem metadata
+            index_blocks = {
+                inode.index_block_id
+                for inode in self.inode_table.values()
+                if inode.index_block_id is not None
+            }
+            data_blocks = {
+                b_id
+                for inode in self.inode_table.values()
+                for b_id in inode.allocated_blocks
+            }
+
             for b_id in range(self.device.get_capacity()):
-                block = getattr(self.device, "get_block")(b_id) if hasattr(self.device, "get_block") else None
-                status_char = "."
-                if block:
-                    if block.block_status == BlockStatus.ALLOCATED:
-                        status_char = "D" if block.owner_inode else "U"
-                    elif block.block_status == BlockStatus.PARITY:
-                        status_char = "P"
-                    elif block.block_status == BlockStatus.BAD:
-                        status_char = "X"
+                if not self.device.is_available(b_id):
+                    status_char = "X"
+                elif b_id in index_blocks:
+                    status_char = "I"
+                elif b_id in data_blocks:
+                    status_char = "D"
+                elif self.device.is_block_free(b_id):
+                    status_char = "."
+                else:
+                    status_char = "D"
+
                 blocks_row.append(f"[{b_id:02d}:{status_char}]")
                 if len(blocks_row) == 8:
                     lines.append(" ".join(blocks_row))
                     blocks_row = []
             if blocks_row:
                 lines.append(" ".join(blocks_row))
-            lines.append("Legenda: . = Livre, D = Dados, P = Paridade, X = Danificado")
+            lines.append("Legenda: . = Livre, D = Dados, I = Índice, X = Danificado")
 
         return "\n".join(lines)
 
