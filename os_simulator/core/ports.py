@@ -30,6 +30,15 @@ class BlockDevicePort(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def allocate_specific_blocks(self, block_ids: List[int]) -> List[int]:
+        """Allocate specific block IDs.
+
+        Raises DiskFullException or InvalidBlockException if any block
+        is already allocated, damaged, or out of bounds.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def free_block(self, block_id: int) -> None:
         """Free previously allocated block."""
         raise NotImplementedError
@@ -64,6 +73,11 @@ class BlockDevicePort(ABC):
         """Check if block_id is within bounds and operational."""
         raise NotImplementedError
 
+    @abstractmethod
+    def is_block_free(self, block_id: int) -> bool:
+        """Check if block_id is currently free for allocation."""
+        raise NotImplementedError
+
 
 class AuthorizationPort(ABC):
     """Abstract port for security and access authorization."""
@@ -91,7 +105,7 @@ class AuthorizationPort(ABC):
 
 class BootstrapSecurityPolicy(AuthorizationPort):
     """Provisional authorization policy for Stages 1 and 2.
-    
+
     Allows operations under the initial execution context without requiring
     premature password storage or complex ACL engine implementations.
     """

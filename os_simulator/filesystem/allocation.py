@@ -11,9 +11,8 @@ from os_simulator.core.exceptions import (
     StorageException,
 )
 from os_simulator.core.ports import BlockDevicePort
-from os_simulator.core.types import AllocationStrategy, BlockStatus
+from os_simulator.core.types import AllocationStrategy
 from os_simulator.filesystem.inode import Inode
-from os_simulator.storage.block_device import DiskBlock
 
 
 class AllocationStrategyBase(ABC):
@@ -46,20 +45,20 @@ class ContiguousAllocation(AllocationStrategyBase):
     def __init__(self, fit_policy: str = "first_fit"):
         self.fit_policy = fit_policy.lower()
 
-    def _find_free_spans(self, device: BlockDevicePort) -> List[Tuple[int, int]]:
-        """Find all contiguous sequences of free blocks as list of (start_block_id, length)."""
+    def _find_free_spans(
+        self, device: BlockDevicePort, excluded_blocks: Optional[set] = None
+    ) -> List[Tuple[int, int]]:
+        """Find all contiguous sequences of free blocks as list of (start_block_id, length).
+
+        If excluded_blocks is provided, blocks in that set are considered free for planning.
+        """
         spans: List[Tuple[int, int]] = []
         current_start: Optional[int] = None
         current_len = 0
+        excluded = excluded_blocks or set()
 
         for block_id in range(device.get_capacity()):
-            is_free = False
-            # Check availability directly on device blocks
-            if hasattr(device, "get_block"):
-                block = getattr(device, "get_block")(block_id)
-                is_free = block.block_status == BlockStatus.FREE
-            else:
-                is_free = device.is_available(block_id)
+            is_free = device.is_block_free(block_id) or (block_id in excluded)
 
             if is_free:
                 if current_start is None:
@@ -105,20 +104,15 @@ class ContiguousAllocation(AllocationStrategyBase):
             )
 
         if self.fit_policy == "best_fit":
-            # Smallest span that fits
             chosen_span = min(eligible_spans, key=lambda s: s[1])
         else:
-            # First span that fits
             chosen_span = eligible_spans[0]
 
         start_id = chosen_span[0]
         allocated = list(range(start_id, start_id + blocks_needed))
 
-        for b_id in allocated:
-            if hasattr(device, "get_block"):
-                block = getattr(device, "get_block")(b_id)
-                block.block_status = BlockStatus.ALLOCATED
-                block.owner_inode = inode.inode_id
+        # Allocate via formal BlockDevicePort method
+        device.allocate_specific_blocks(allocated)
 
         inode.allocated_blocks = allocated
         inode.file_size = size_bytes
@@ -135,20 +129,125 @@ class ContiguousAllocation(AllocationStrategyBase):
     def write_data(self, device: BlockDevicePort, inode: Inode, data: bytes | bytearray) -> None:
         block_size = device.get_block_size()
         payload_len = len(data)
-
-        # Reallocate if size changed or blocks not yet allocated
         blocks_needed = math.ceil(payload_len / block_size) if payload_len > 0 else 0
-        if len(inode.allocated_blocks) != blocks_needed:
-            self.free(device, inode)
-            if blocks_needed > 0:
-                self.allocate(device, inode, payload_len)
+        current_blocks = list(inode.allocated_blocks)
+        current_count = len(current_blocks)
+        old_size = inode.file_size
 
-        inode.file_size = payload_len
-        for idx, block_id in enumerate(inode.allocated_blocks):
-            start = idx * block_size
-            end = min(start + block_size, payload_len)
-            chunk = data[start:end]
-            device.write_block(block_id, chunk)
+        # Case 1: Empty file write
+        if blocks_needed == 0:
+            self.free(device, inode)
+            inode.file_size = 0
+            return
+
+        # Case 2: In-place overwrite (exact same number of blocks)
+        if blocks_needed == current_count:
+            inode.file_size = payload_len
+            for idx, block_id in enumerate(current_blocks):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+            return
+
+        # Case 3: Shrinking (fewer blocks needed)
+        if blocks_needed < current_count:
+            kept_blocks = current_blocks[:blocks_needed]
+            excess_blocks = current_blocks[blocks_needed:]
+
+            # Write payload to kept blocks
+            for idx, block_id in enumerate(kept_blocks):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+
+            # Free excess blocks
+            device.free_blocks(excess_blocks)
+            inode.allocated_blocks = kept_blocks
+            inode.file_size = payload_len
+            return
+
+        # Case 4: Growing (more blocks needed)
+        delta = blocks_needed - current_count
+
+        # 4a. Try in-place expansion if immediately subsequent blocks are free
+        if current_count > 0:
+            last_block = current_blocks[-1]
+            expansion_candidate = list(range(last_block + 1, last_block + 1 + delta))
+            can_expand_in_place = all(
+                b < device.get_capacity() and device.is_block_free(b)
+                for b in expansion_candidate
+            )
+            if can_expand_in_place:
+                device.allocate_specific_blocks(expansion_candidate)
+                combined = current_blocks + expansion_candidate
+                for idx, block_id in enumerate(combined):
+                    start = idx * block_size
+                    end = min(start + block_size, payload_len)
+                    device.write_block(block_id, data[start:end])
+                inode.allocated_blocks = combined
+                inode.file_size = payload_len
+                return
+
+        # 4b. Expansion in-place not possible; check if a new span exists in current free space
+        spans = self._find_free_spans(device)
+        eligible_spans = [s for s in spans if s[1] >= blocks_needed]
+        if eligible_spans:
+            chosen = min(eligible_spans, key=lambda s: s[1]) if self.fit_policy == "best_fit" else eligible_spans[0]
+            new_span = list(range(chosen[0], chosen[0] + blocks_needed))
+            device.allocate_specific_blocks(new_span)
+            for idx, block_id in enumerate(new_span):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+            if current_blocks:
+                device.free_blocks(current_blocks)
+            inode.allocated_blocks = new_span
+            inode.file_size = payload_len
+            return
+
+        # 4c. New span not available in current free space.
+        # Check whether freeing current blocks would allow reallocation
+        total_available = device.get_free_count() + current_count
+        if total_available < blocks_needed:
+            raise DiskFullException(
+                f"Espaço insuficiente: necessários {blocks_needed} blocos, disponíveis {total_available}."
+            )
+
+        # Plan with current blocks treated as free
+        planned_spans = self._find_free_spans(device, excluded_blocks=set(current_blocks))
+        eligible_planned = [s for s in planned_spans if s[1] >= blocks_needed]
+        if not eligible_planned:
+            max_contiguous = max((s[1] for s in planned_spans), default=0)
+            raise DiskFragmentationException(
+                f"Fragmentação externa detectada: existem {total_available} blocos potencialmente livres, "
+                f"mas a maior sequência contígua possível é de apenas {max_contiguous} blocos "
+                f"(necessários {blocks_needed} contíguos)."
+            )
+
+        # Reallocation with transactional rollback
+        old_data = self.read_data(device, inode) if current_blocks else bytearray()
+        device.free_blocks(current_blocks)
+        try:
+            new_allocated = self.allocate(device, inode, payload_len)
+            for idx, block_id in enumerate(new_allocated):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+            inode.allocated_blocks = new_allocated
+            inode.file_size = payload_len
+        except Exception:
+            # Rollback: restore previous state
+            if inode.allocated_blocks:
+                device.free_blocks(inode.allocated_blocks)
+            device.allocate_specific_blocks(current_blocks)
+            if old_data:
+                for idx, block_id in enumerate(current_blocks):
+                    start = idx * block_size
+                    end = min(start + block_size, len(old_data))
+                    device.write_block(block_id, old_data[start:end])
+            inode.allocated_blocks = current_blocks
+            inode.file_size = old_size
+            raise
 
     def read_data(self, device: BlockDevicePort, inode: Inode) -> bytearray:
         result = bytearray()
@@ -181,7 +280,7 @@ class LinkedFATAllocation(AllocationStrategyBase):
             inode.file_size = 0
             return []
 
-        allocated = device.allocate_blocks(blocks_needed, owner_inode=inode.inode_id)
+        allocated = device.allocate_blocks(blocks_needed)
 
         # Build FAT chain
         for i in range(len(allocated) - 1):
@@ -206,22 +305,101 @@ class LinkedFATAllocation(AllocationStrategyBase):
         block_size = device.get_block_size()
         payload_len = len(data)
         blocks_needed = math.ceil(payload_len / block_size) if payload_len > 0 else 0
+        current_blocks = list(inode.allocated_blocks)
+        current_count = len(current_blocks)
+        old_size = inode.file_size
 
-        if len(inode.allocated_blocks) != blocks_needed:
+        # Case 1: Empty file write
+        if blocks_needed == 0:
             self.free(device, inode)
-            if blocks_needed > 0:
-                self.allocate(device, inode, payload_len)
+            inode.file_size = 0
+            return
 
-        inode.file_size = payload_len
-        current_block = inode.allocated_blocks[0] if inode.allocated_blocks else None
-        offset = 0
+        # Case 2: In-place overwrite (same number of blocks)
+        if blocks_needed == current_count:
+            inode.file_size = payload_len
+            offset = 0
+            curr = current_blocks[0]
+            while curr != -1 and offset < payload_len:
+                end = min(offset + block_size, payload_len)
+                device.write_block(curr, data[offset:end])
+                offset = end
+                curr = self.fat_table.get(curr, -1)
+            return
 
-        while current_block is not None and current_block != -1:
-            end = min(offset + block_size, payload_len)
-            chunk = data[offset:end]
-            device.write_block(current_block, chunk)
-            offset = end
-            current_block = self.fat_table.get(current_block, -1)
+        # Case 3: Shrinking (fewer blocks needed)
+        if blocks_needed < current_count:
+            kept_blocks = current_blocks[:blocks_needed]
+            excess_blocks = current_blocks[blocks_needed:]
+
+            # Update FAT table
+            self.fat_table[kept_blocks[-1]] = -1
+            for b_id in excess_blocks:
+                self.fat_table.pop(b_id, None)
+
+            # Free excess blocks on device
+            device.free_blocks(excess_blocks)
+
+            # Write data to kept blocks
+            offset = 0
+            curr = kept_blocks[0]
+            while curr != -1 and offset < payload_len:
+                end = min(offset + block_size, payload_len)
+                device.write_block(curr, data[offset:end])
+                offset = end
+                curr = self.fat_table.get(curr, -1)
+
+            inode.allocated_blocks = kept_blocks
+            inode.file_size = payload_len
+            return
+
+        # Case 4: Growing (more blocks needed)
+        delta = blocks_needed - current_count
+        if device.get_free_count() < delta:
+            raise DiskFullException(
+                f"Espaço insuficiente: necessários {delta} blocos adicionais, disponíveis {device.get_free_count()}."
+            )
+
+        if current_count == 0:
+            # Fresh allocation
+            new_blocks = self.allocate(device, inode, payload_len)
+            offset = 0
+            curr = new_blocks[0]
+            while curr != -1 and offset < payload_len:
+                end = min(offset + block_size, payload_len)
+                device.write_block(curr, data[offset:end])
+                offset = end
+                curr = self.fat_table.get(curr, -1)
+            return
+
+        # Allocate additional blocks and link to existing chain
+        new_blocks = device.allocate_blocks(delta)
+        try:
+            self.fat_table[current_blocks[-1]] = new_blocks[0]
+            for i in range(len(new_blocks) - 1):
+                self.fat_table[new_blocks[i]] = new_blocks[i + 1]
+            self.fat_table[new_blocks[-1]] = -1
+
+            combined = current_blocks + new_blocks
+            offset = 0
+            curr = combined[0]
+            while curr != -1 and offset < payload_len:
+                end = min(offset + block_size, payload_len)
+                device.write_block(curr, data[offset:end])
+                offset = end
+                curr = self.fat_table.get(curr, -1)
+
+            inode.allocated_blocks = combined
+            inode.file_size = payload_len
+        except Exception:
+            # Rollback added blocks
+            for b_id in new_blocks:
+                self.fat_table.pop(b_id, None)
+            self.fat_table[current_blocks[-1]] = -1
+            device.free_blocks(new_blocks)
+            inode.allocated_blocks = current_blocks
+            inode.file_size = old_size
+            raise
 
     def read_data(self, device: BlockDevicePort, inode: Inode) -> bytearray:
         result = bytearray()
@@ -248,7 +426,6 @@ class IndexedAllocation(AllocationStrategyBase):
         block_size = device.get_block_size()
         data_blocks_needed = math.ceil(size_bytes / block_size) if size_bytes > 0 else 0
 
-        # Always allocate 1 index block + N data blocks
         total_blocks_needed = data_blocks_needed + 1
         if device.get_free_count() < total_blocks_needed:
             raise DiskFullException(
@@ -257,11 +434,11 @@ class IndexedAllocation(AllocationStrategyBase):
             )
 
         # 1. Allocate dedicated index block
-        index_block_id = device.allocate_block(owner_inode=inode.inode_id)
+        index_block_id = device.allocate_block()
 
         # 2. Allocate data blocks
         data_blocks = (
-            device.allocate_blocks(data_blocks_needed, owner_inode=inode.inode_id)
+            device.allocate_blocks(data_blocks_needed)
             if data_blocks_needed > 0
             else []
         )
@@ -289,11 +466,9 @@ class IndexedAllocation(AllocationStrategyBase):
         return list(struct.unpack(f">{count}I", raw[: count * 4]))
 
     def free(self, device: BlockDevicePort, inode: Inode) -> None:
-        # Free data blocks
         if inode.allocated_blocks:
             device.free_blocks(inode.allocated_blocks)
             inode.allocated_blocks = []
-        # Free index block
         if inode.index_block_id is not None:
             device.free_block(inode.index_block_id)
             inode.index_block_id = None
@@ -303,26 +478,84 @@ class IndexedAllocation(AllocationStrategyBase):
         block_size = device.get_block_size()
         payload_len = len(data)
         data_blocks_needed = math.ceil(payload_len / block_size) if payload_len > 0 else 0
+        current_blocks = list(inode.allocated_blocks)
+        current_count = len(current_blocks)
+        old_size = inode.file_size
 
-        # If block count changed, reallocate
-        if len(inode.allocated_blocks) != data_blocks_needed or inode.index_block_id is None:
+        # Case 1: Empty file write
+        if data_blocks_needed == 0:
             self.free(device, inode)
-            self.allocate(device, inode, payload_len)
+            inode.file_size = 0
+            return
 
-        inode.file_size = payload_len
-        # Write payload chunks to data blocks
-        for idx, block_id in enumerate(inode.allocated_blocks):
-            start = idx * block_size
-            end = min(start + block_size, payload_len)
-            chunk = data[start:end]
-            device.write_block(block_id, chunk)
+        # Case 2: Fresh allocation (file had no index block yet)
+        if inode.index_block_id is None:
+            self.allocate(device, inode, payload_len)
+            for idx, block_id in enumerate(inode.allocated_blocks):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+            return
+
+        # Case 3: In-place overwrite (exact same number of data blocks)
+        if data_blocks_needed == current_count:
+            inode.file_size = payload_len
+            for idx, block_id in enumerate(current_blocks):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+            return
+
+        # Case 4: Shrinking (fewer data blocks needed)
+        if data_blocks_needed < current_count:
+            kept_blocks = current_blocks[:data_blocks_needed]
+            excess_blocks = current_blocks[data_blocks_needed:]
+
+            # Write payload to kept blocks
+            for idx, block_id in enumerate(kept_blocks):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+
+            # Update index block pointers
+            self._write_index_block(device, inode.index_block_id, kept_blocks)
+
+            # Free excess blocks on device
+            device.free_blocks(excess_blocks)
+            inode.allocated_blocks = kept_blocks
+            inode.file_size = payload_len
+            return
+
+        # Case 5: Growing (more data blocks needed)
+        delta = data_blocks_needed - current_count
+        if device.get_free_count() < delta:
+            raise DiskFullException(
+                f"Espaço insuficiente: necessários {delta} blocos adicionais, disponíveis {device.get_free_count()}."
+            )
+
+        new_blocks = device.allocate_blocks(delta)
+        try:
+            combined = current_blocks + new_blocks
+            self._write_index_block(device, inode.index_block_id, combined)
+            for idx, block_id in enumerate(combined):
+                start = idx * block_size
+                end = min(start + block_size, payload_len)
+                device.write_block(block_id, data[start:end])
+            inode.allocated_blocks = combined
+            inode.file_size = payload_len
+        except Exception:
+            # Rollback: release newly allocated blocks and restore index pointers
+            device.free_blocks(new_blocks)
+            self._write_index_block(device, inode.index_block_id, current_blocks)
+            inode.allocated_blocks = current_blocks
+            inode.file_size = old_size
+            raise
 
     def read_data(self, device: BlockDevicePort, inode: Inode) -> bytearray:
         result = bytearray()
         if inode.index_block_id is None or not inode.allocated_blocks:
             return result
 
-        # Read pointers from index block to ensure structural integrity
         pointers = self._read_index_block(device, inode.index_block_id)
         bytes_left = inode.file_size
 
