@@ -7,9 +7,10 @@
 ## ESTRATÉGIA DE BRANCHES E FLUXO DE TRABALHO
 
 - `main`: Branch de produção / versões consolidadas e estáveis.
-- `dev`: Branch principal de desenvolvimento e integração contínua.
-- Branches de funcionalidade (Features):
+- `dev`: Branch principal de desenvolvimento e integração contínua (Branch padrão de trabalho).
+- Branches de funcionalidade (Features e Fixes):
   - `feature/fase-0-documentacao`: Governança, especificação arquitetural e contratos (Fase 0).
+  - `fix/fase-0-consistencia`: Revisão documental, portas de desacoplamento e alinhamento pré-implementação (Fase 0.1).
   - `feature/etapa-1-filesystem`: Subsistema de Arquivos, VFS, i-nodes e estratégias de alocação (Fase 1).
   - `feature/etapa-2-io-raid`: Gerenciamento de E/S, escalonamento de disco e controladores RAID (Fase 2).
   - `feature/etapa-3-security`: Autenticação, controle de acesso ACL, anéis de privilégio e criptografia (Fase 3).
@@ -57,18 +58,42 @@ Cada etapa segue rigorosamente:
 
 ---
 
+### Fase 0.1 — Auditoria de Consistência, Desacoplamento e Pré-Implementação
+**Branch:** `fix/fase-0-consistencia`  
+**Objetivo:** Estabelecer as portas abstratas `BlockDevicePort` e `AuthorizationPort` com adaptadores provisórios (`InMemoryBlockDevice`, `BootstrapSecurityPolicy`), alinhar comandos da CLI com a sintaxe oficial do professor, refinar PBKDF2 (600k iterações) e AES-256-GCM, distinguir as 3 origens de páginas no fluxo de Page Fault / Swap e consolidar casos de teste no Ground Truth.
+
+- [x] Criar e alternar para a branch `fix/fase-0-consistencia` a partir de `dev`.
+- [x] Especificar o contrato formal de armazenamento `BlockDevicePort` e o adaptador provisório `InMemoryBlockDevice`.
+- [x] Especificar o contrato formal de segurança `AuthorizationPort` e o adaptador provisório `BootstrapSecurityPolicy`.
+- [x] Atualizar os diagramas Mermaid na arquitetura para evidenciar a evolução dos adaptadores entre as Etapas 1, 2, 3 e 4.
+- [x] Alinhar integralmente os comandos da CLI com a sintaxe oficial (`--size`, `--details`, `--name`, `--type`, `--user`, `--key`).
+- [x] Atualizar a especificação de credenciais para PBKDF2-HMAC-SHA256 com 600.000 iterações e salt de 16 bytes.
+- [x] Especificar criptografia em repouso AES-256-GCM com nonce exclusivo de 12 bytes, tag de autenticação e separação de chaves.
+- [x] Corrigir o tratamento de Page Fault para diferenciar origens (Imagem de Processo, Zero-Fill sob Demanda, Slot de Swap).
+- [x] Preservar tanto o cenário `MEM-004A` (tradução página 1 -> moldura 12) quanto `MEM-004B` (página 1, moldura 5 -> endereço 20484).
+- [x] Revisar o cenário determinístico `MEM-005` (Swap e Page Fault sem falso swap-in de páginas não descarregadas).
+- [x] Remover badges de licença no `README.md` até definição formal pelo proprietário.
+- [x] Executar auditoria cruzada de consistência entre todos os documentos revisados.
+- [x] Registrar commits no padrão Conventional Commits na branch `fix/fase-0-consistencia`.
+- [x] Realizar push da branch `fix/fase-0-consistencia` para `origin`.
+- [x] Integrar as alterações à branch `dev`.
+- [x] Realizar push da branch `dev` para `origin`.
+
+---
+
 ### Fase 1 — Subsistema de Sistema de Arquivos
 **Branch:** `feature/etapa-1-filesystem`  
-**Objetivo:** Construir a camada de representação em árvore de arquivos e diretórios, VFS, abstração de i-nodes e blocos de dados, suportando três estratégias de alocação de armazenamento e diagnóstico de fragmentação.
+**Objetivo:** Construir a camada de representação em árvore de arquivos e diretórios, VFS, abstração de i-nodes e blocos de dados, suportando três estratégias de alocação de armazenamento e diagnóstico de fragmentação, operando sobre `BlockDevicePort` e `AuthorizationPort`.
 
 - [ ] Definir a hierarquia de nós (`Node`, `DirectoryNode`, `FileNode`) e resolução de caminhos VFS (absolutos e relativos).
 - [ ] Implementar a abstração de i-nodes (`Inode`) com metadados POSIX simulados (tamanho, permissões, proprietário, timestamps, blocos).
-- [ ] Implementar a tabela de blocos simulados (`DiskBlock`) na memória.
+- [ ] Implementar a porta `BlockDevicePort` e o adaptador provisório em memória `InMemoryBlockDevice`.
+- [ ] Implementar a porta `AuthorizationPort` e a política provisória `BootstrapSecurityPolicy`.
 - [ ] Implementar a Estratégia de Alocação Contígua com First-Fit / Best-Fit e detecção de fragmentação externa.
 - [ ] Implementar a Estratégia de Alocação Encadeada (FAT — File Allocation Table) com encadeamento de ponteiros.
 - [ ] Implementar a Estratégia de Alocação Indexada com bloco de índices direto e indireto.
 - [ ] Implementar cálculo matemático preciso de fragmentação interna (último bloco) e fragmentação externa.
-- [ ] Implementar os comandos da CLI: `mkdir`, `create`, `ls`, `cd`, `write_file` (versão base), `read_file` (versão base), `fs_status`.
+- [ ] Implementar os comandos da CLI: `mkdir`, `create --size`, `ls`, `cd`, `write_file`, `read_file`, `fs_status --details`.
 - [ ] Implementar suite de testes unitários para o sistema de arquivos.
 - [ ] Validar e homologar os cenários determinísticos `FS-001`, `FS-002` e `FS-003` do `tests/GROUND_TRUTH.md`.
 - [ ] Consolidar commits e integrar à `dev`.
@@ -77,9 +102,9 @@ Cada etapa segue rigorosamente:
 
 ### Fase 2 — Entrada e Saída (I/O), Escalonamento e RAID
 **Branch:** `feature/etapa-2-io-raid`  
-**Objetivo:** Construir a camada de gerenciamento de requisições de E/S (`IORequest`), algoritmos de escalonamento de braço de disco magnético, simulação de SSD com Wear Leveling e arranjos redundantes de discos (RAID 0, 1, 4 e 5) com tolerância a falhas.
+**Objetivo:** Construir a camada de gerenciamento de requisições de E/S (`IORequest`), algoritmos de escalonamento de braço de disco magnético, simulação de SSD com Wear Leveling e arranjos redundantes de discos (RAID 0, 1, 4 e 5), substituindo o adaptador `InMemoryBlockDevice` pelo `IOManager` via `BlockDevicePort`.
 
-- [ ] Integrar operações de leitura e escrita do `FileSystemService` ao subsistema de `IOManager`.
+- [ ] Integrar operações de leitura e escrita do `FileSystemService` ao subsistema de `IOManager` via `BlockDevicePort`.
 - [ ] Implementar a abstração `IORequest` com atributos de bloco alvo, trilha, tipo (leitura/escrita) e prioridade.
 - [ ] Implementar fila de requisições e a classe base `DiskScheduler`.
 - [ ] Implementar o algoritmo de escalonamento FCFS (First-Come, First-Served).
@@ -87,7 +112,7 @@ Cada etapa segue rigorosamente:
 - [ ] Implementar o algoritmo de escalonamento SCAN (Elevator).
 - [ ] Implementar o algoritmo de escalonamento C-SCAN (Circular SCAN).
 - [ ] Implementar a abstração `SSDController` com matriz de desgaste e algoritmo de *Wear Leveling* dinâmico.
-- [ ] Implementar a abstração `PhysicalDisk` em memória, simulando múltiplos discos independentes.
+- [ ] Implementar a abstração `PhysicalDisk` em memória, simulando múltiplos discos independentes e posse de `DiskBlock`.
 - [ ] Implementar arranjo RAID 0 (Striping puro).
 - [ ] Implementar arranjo RAID 1 (Mirroring puro).
 - [ ] Implementar arranjo RAID 4 (Striping com disco de paridade dedicado).
@@ -102,18 +127,18 @@ Cada etapa segue rigorosamente:
 
 ### Fase 3 — Segurança, Controle de Acesso e Proteção
 **Branch:** `feature/etapa-3-security`  
-**Objetivo:** Construir o subsistema de controle de segurança, autenticação robusta, autorização baseada em Listas de Controle de Acesso (ACL) e permissões POSIX, separação estrita de modos de privilégio (Usuário vs. Kernel), logs de auditoria invioláveis, criptografia em repouso e integridade com antivírus simulado.
+**Objetivo:** Construir o subsistema de controle de segurança substituindo `BootstrapSecurityPolicy` pelo `SecurityManager` via `AuthorizationPort`, com PBKDF2-HMAC-SHA256 (600k iterações), controle de acesso por ACLs e permissões POSIX, anéis de privilégio (Usuário vs. Kernel), auditoria, criptografia AES-256-GCM em repouso e antivírus simulado.
 
 - [ ] Implementar as entidades `User` e `Group`, gerenciando identidades e associações múltiplas.
-- [ ] Implementar o serviço de autenticação com derivação de chave criptográfica via PBKDF2-HMAC-SHA256 e salts pseudoaleatórios criptograficamente seguros (`secrets.token_bytes`).
-- [ ] Implementar o modelo de anéis de execução: Modo Usuário (Ring 3) e Modo Kernel (Ring 0), interceptando chamadas privilegiadas.
-- [ ] Implementar a classe `ACL` com validação de permissões `rwx` para Proprietário, Grupo e Outros, com conversão bidirecional octal (`0o755`, `0o750`, `0o644`, etc.).
-- [ ] Integrar a checagem de ACL em todas as operações de leitura, escrita, execução e criação do VFS.
-- [ ] Implementar o subsistema de Auditoria (`AuditLog`), registrando acessos concedidos, acessos negados, autenticações e operações de sistema.
-- [ ] Implementar o módulo de criptografia de arquivos em repouso com derivação de chave e marcação em i-node.
-- [ ] Implementar o verificador de integridade via hash SHA-256 de blocos, detectando adulteração.
-- [ ] Implementar o motor de antivírus simulado (`antivirus_scan`) baseado em base de assinaturas simuladas.
-- [ ] Implementar os comandos da CLI: `login`, `whoami`, `chmod`, `useradd`, `groupadd`, `encrypt_file`, `antivirus_scan`.
+- [ ] Implementar o serviço de autenticação com derivação de chave criptográfica via PBKDF2-HMAC-SHA256 (600.000 iterações) e salts de 16 bytes (`secrets.token_bytes`).
+- [ ] Implementar o modelo de anéis de execução: Modo Usuário (Ring 3) e Modo Kernel (Ring 0).
+- [ ] Implementar a classe `ACL` com validação de permissões `rwx` para Proprietário, Grupo e Outros, com conversão octal (`0o755`, `0o750`, `0o644`, etc.).
+- [ ] Substituir o adaptador provisório de segurança por `SecurityManager` na porta `AuthorizationPort`.
+- [ ] Implementar o subsistema de Auditoria (`AuditLog`), registrando acessos concedidos, negados, logins e operações privilegiadas.
+- [ ] Implementar criptografia AES-256-GCM com nonce exclusivo de 12 bytes, tag de autenticação e separação de chaves.
+- [ ] Implementar o verificador de integridade via hash SHA-256 de blocos e HMAC do Kernel para prevenir adulterações coordenadas.
+- [ ] Implementar o motor de antivírus simulado (`antivirus_scan`) baseado em assinaturas simuladas.
+- [ ] Implementar os comandos da CLI: `login --user`, `chmod`, `encrypt_file --key`, `antivirus_scan`.
 - [ ] Validar e homologar os cenários determinísticos `SEC-001`, `SEC-002` e `SEC-003` do `tests/GROUND_TRUTH.md`.
 - [ ] Consolidar commits e integrar à `dev`.
 
@@ -121,21 +146,21 @@ Cada etapa segue rigorosamente:
 
 ### Fase 4 — Gerenciamento de Memória Real e Virtual
 **Branch:** `feature/etapa-4-memory`  
-**Objetivo:** Construir o subsistema de gerenciamento de memória dividido em Área Reservada Contígua (para Kernel e drivers com diagnóstico de fragmentação externa e compactação dinâmica) e Área Dinâmica Paginada (com MMU, Page Tables, molduras físicas, tratamento de Page Fault, políticas LRU e Segunda Chance, e Swap integrado ao disco simulado).
+**Objetivo:** Construir o subsistema de gerenciamento de memória dividido em Área Reservada Contígua e Área Dinâmica Paginada (MMU, Page Tables, molduras, Page Fault com origens válidas, políticas LRU e Segunda Chance, e Swap integrado via `BlockDevicePort`).
 
 - [ ] Implementar a abstração de Memória Física (`PhysicalMemory`) dividida em Área Reservada e Área Dinâmica.
 - [ ] Implementar o gerenciador da Área Reservada Contígua com alocação First-Fit / Best-Fit de `MemorySegment`.
-- [ ] Implementar o cálculo de fragmentação externa na Área Reservada e o algoritmo de desfragmentação / compactação (`memory_compact`).
-- [ ] Implementar a infraestrutura de Memória Paginada: `PageTable`, `PageTableEntry` (bits: present, dirty, referenced, last_access) e molduras físicas (`Frame`).
+- [ ] Implementar o cálculo de fragmentação externa na Área Reservada e o algoritmo de desfragmentação / compactação (`memory_compact --reserved`).
+- [ ] Implementar a infraestrutura de Memória Paginada: `PageTable`, `PageTableEntry` (bits: present, dirty, referenced, last_access, e `page_origin`) e molduras físicas (`Frame`).
 - [ ] Implementar o componente `MMU` para tradução de endereços lógicos em físicos: $(p, d) \to (f, d)$.
-- [ ] Implementar a interrupção de falta de página (`PageFaultException`) e seu handler de resolução.
+- [ ] Implementar o tratamento de `PageFaultException` distinguindo origens: Imagem de Processo, Zero-Fill-on-Demand e Swap.
+- [ ] Implementar descarte de página vítima limpa (`dirty == False`) e swap-out de página modificada (`dirty == True`).
 - [ ] Implementar a política de substituição de páginas LRU (Least Recently Used) baseada em idade/timestamp de acesso.
 - [ ] Implementar a política de substituição Segunda Chance (Clock Algorithm) baseada no bit de referência.
-- [ ] Implementar a partição de `SwapManager` integrada ao subsistema de armazenamento simulado, com suporte a swap-in e swap-out de páginas com bit *dirty*.
+- [ ] Implementar a partição de `SwapManager` integrada ao armazenamento secundário simulado via `BlockDevicePort`.
 - [ ] Implementar cálculo de fragmentação interna na última página lógica do processo.
-- [ ] Implementar a integração completa com o ciclo de vida de processos (`create_process`, `terminate_process`, `execute_step`).
-- [ ] Implementar os comandos da CLI: `create_process`, `terminate_process`, `memory_status`, `memory_compact`, `translate_address`, `execute_step`.
-- [ ] Validar e homologar os cenários determinísticos `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004` e `MEM-005` do `tests/GROUND_TRUTH.md`.
+- [ ] Implementar a integração completa com o ciclo de vida de processos (`create_process --name --size --type`, `terminate_process --name`, `execute_step --process --instruction`).
+- [ ] Validar e homologar os cenários determinísticos `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004A`, `MEM-004B` e `MEM-005` do `tests/GROUND_TRUTH.md`.
 - [ ] Consolidar commits e integrar à `dev`.
 
 ---
@@ -144,8 +169,9 @@ Cada etapa segue rigorosamente:
 
 | Versão | Fase | Descrição | Status |
 |---|---|---|---|
-| `v0.1.0` | Fase 0 | Fundação Arquitetural, Governança Git e Especificações | Em andamento |
-| `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação | Não iniciado |
+| `v0.1.0` | Fase 0 | Fundação Arquitetural, Governança Git e Especificações | Concluído |
+| `v0.1.1` | Fase 0.1 | Revisão de Consistência, Portas/Adaptadores e Alinhamento CLI | Em andamento |
+| `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação via Adaptador em Memória | Não iniciado |
 | `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Não iniciado |
-| `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia | Não iniciado |
+| `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Não iniciado |
 | `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Não iniciado |

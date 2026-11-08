@@ -1,216 +1,190 @@
 # CATÁLOGO DE ESTRUTURAS DE DADOS — OS SIMULATOR
 
-> **Status:** Especificação Oficial (Fase 0)  
-> **Objetivo:** Definir com rigor formal todas as entidades, classes, atributos tipados em Python, responsabilidades e relacionamentos entre os subsistemas do simulador.
+> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
+> **Objetivo:** Definir com rigor formal todas as entidades, classes, atributos tipados em Python, contratos de interface (Portas), adaptadores provisórios/definitivos e relacionamentos entre os subsistemas do simulador.
 
 ---
 
 ## 1. CONVENÇÕES E DIRETRIZES DE TIPAGEM
 
 1. **Tipos Python Nativos e Dataclasses:** Todas as estruturas devem ser representadas utilizando tipos da biblioteca padrão do Python (`typing`, `dataclasses`, `enum`, `collections`).
-2. **Isolamento de Recursos:** Nenhum atributo pode conter ponteiros para o sistema de arquivos ou memória do Windows (`HANDLE`, `HWND`, caminhos de arquivo NTFS no disco C:, ponteiros C types).
-3. **Imutabilidade e Encapsulamento:** Identificadores únicos (`id`), tamanhos de blocos e capacidades físicas são imutáveis após a instanciação.
+2. **Isolamento de Recursos:** Nenhum atributo pode conter ponteiros para o sistema de arquivos ou memória do Windows (`HANDLE`, caminhos reais no disco C:, ponteiros C types).
+3. **Imutabilidade e Encapsulamento:** Identificadores únicos (`id`), capacidades físicas e tamanhos de blocos são imutáveis após a instanciação.
 
 ---
 
-## 2. SUBSISTEMA DE SISTEMA DE ARQUIVOS (FILESYSTEM)
+## 2. PORTAS ABSTRATAS E CONTRATOS DE DESACOPLAMENTO (CORE)
 
-### 2.1. `Node` (Nó da Árvore Hierárquica)
+### 2.1. `BlockDevicePort` (Contrato de Armazenamento em Bloco)
+| Campo | Especificação |
+|---|---|
+| **Tipo** | Interface Abstrata / Protocol (`abc.ABC` ou `typing.Protocol`) |
+| **Subsistema** | `core.ports` |
+| **Métodos Obrigatórios** | • `read_block(block_id: int) -> bytearray` — Lê o conteúdo do bloco informado.<br>• `write_block(block_id: int, data: bytearray) -> None` — Grava dados no bloco.<br>• `allocate_block() -> int` — Reserva um bloco livre e retorna seu ID numérico.<br>• `free_block(block_id: int) -> None` — Libera o bloco para reutilização.<br>• `get_capacity() -> int` — Retorna a capacidade total em blocos.<br>• `get_free_count() -> int` — Retorna o número de blocos atualmente livres.<br>• `is_available(block_id: int) -> bool` — Verifica se o bloco é válido e operacional. |
+| **Implementações** | • `InMemoryBlockDevice` (Etapa 1 — Adaptador provisório em memória RAM).<br>• `IOBlockDeviceAdapter` (Etapa 2 — Adaptador integrado a `IOManager`, `DiskScheduler` e `RAIDArray`). |
+| **Responsabilidades** | Prover uma abstração de acesso a blocos desacoplada das implementações físicas e eletromecânicas. |
+
+---
+
+### 2.2. `AuthorizationPort` (Contrato de Autorização e Segurança)
+| Campo | Especificação |
+|---|---|
+| **Tipo** | Interface Abstrata / Protocol |
+| **Subsistema** | `core.ports` |
+| **Métodos Obrigatórios** | • `check_read(context: ExecutionContext, path: str) -> bool` — Valida leitura.<br>• `check_write(context: ExecutionContext, path: str) -> bool` — Valida escrita.<br>• `check_execute(context: ExecutionContext, path: str) -> bool` — Valida execução.<br>• `is_admin(context: ExecutionContext) -> bool` — Valida privilégios de superusuário/Kernel. |
+| **Implementações** | • `BootstrapSecurityPolicy` (Etapas 1 e 2 — Autorização ampla sob usuário simulado root).<br>• `SecurityManager` (Etapa 3 — Validação estrita por ACL POSIX, anéis de privilégio e auditoria). |
+| **Responsabilidades** | Proteger recursos do sistema permitindo funcionamento provisório sem antecipação de código de segurança complexo. |
+
+---
+
+### 2.3. `ExecutionContext` (Contexto de Sessão Ativa)
+| Campo | Especificação |
+|---|---|
+| **Classe** | `ExecutionContext` |
+| **Subsistema** | `core.context` |
+| **Atributos** | • `user_id: int` — UID do usuário ativo (0 para root).<br>• `username: str` — Nome do usuário da sessão corrente (padrão inicial: `"root"`).<br>• `groups: List[str]` — Grupos do usuário (padrão inicial: `["root", "admin"]`).<br>• `privilege_mode: PrivilegeMode` — Enum (`KERNEL_MODE`, `USER_MODE`).<br>• `cwd: str` — Diretório de trabalho atual no VFS (padrão: `"/"`). |
+| **Responsabilidades** | Rastrear o estado de identidade e contexto de privilégio de cada comando executado. |
+
+---
+
+## 3. SUBSISTEMA DE SISTEMA DE ARQUIVOS (FILESYSTEM)
+
+### 3.1. `Node` (Nó da Árvore Hierárquica)
 | Campo | Especificação |
 |---|---|
 | **Classe** | `Node` (e subclasses `DirectoryNode`, `FileNode`) |
 | **Subsistema** | `filesystem` |
-| **Atributos** | • `name: str` — Nome do arquivo ou diretório.<br>• `node_type: NodeType` — Enum (`DIRECTORY`, `FILE`).<br>• `parent: Optional[DirectoryNode]` — Referência ao diretório pai (`None` na raiz `/`).<br>• `children: Dict[str, Node]` — Dicionário `nome -> Node` (vazio para arquivos).<br>• `inode: Inode` — Instância do i-node contendo metadados e blocos.<br>• `created_at: float` — Timestamp simulado de criação.<br>• `modified_at: float` — Timestamp simulado de modificação. |
+| **Atributos** | • `name: str` — Nome do arquivo ou diretório.<br>• `node_type: NodeType` — Enum (`DIRECTORY`, `FILE`).<br>• `parent: Optional[DirectoryNode]` — Referência ao diretório pai (`None` na raiz `/`).<br>• `children: Dict[str, Node]` — Dicionário `nome -> Node` (vazio para arquivos).<br>• `inode_id: int` — Identificador do `Inode` associado.<br>• `created_at: float` — Timestamp simulado de criação.<br>• `modified_at: float` — Timestamp simulado de modificação. |
 | **Responsabilidades** | Manter a topologia em árvore do VFS, permitindo travessia por caminhos absolutos e relativos, adição e remoção de nós filhos. |
-| **Relacionamentos** | Composição com `Inode`; associação 1:N com nós filhos em `DirectoryNode`. |
+| **Relacionamentos** | Referencia `Inode` por ID; associação 1:N com nós filhos em `DirectoryNode`. |
 
 ---
 
-### 2.2. `Inode` (Estrutura de Metadados e Mapeamento)
+### 3.2. `Inode` (Estrutura de Metadados e Mapeamento de Blocos)
 | Campo | Especificação |
 |---|---|
 | **Classe** | `Inode` |
 | **Subsistema** | `filesystem` |
-| **Atributos** | • `inode_id: int` — Identificador numérico único do i-node na tabela.<br>• `file_size: int` — Tamanho real do conteúdo em bytes.<br>• `permissions: ACL` — Instância de ACL com permissões rwx para proprietário, grupo e outros.<br>• `owner: str` — Nome do usuário proprietário.<br>• `group: str` — Nome do grupo associado.<br>• `allocated_blocks: List[int]` — Lista de IDs de blocos de disco alocados.<br>• `allocation_strategy: AllocationStrategy` — Enum (`CONTIGUOUS`, `LINKED_FAT`, `INDEXED`).<br>• `metadata: Dict[str, Any]` — Dicionário de metadados extras (ex.: flag `is_encrypted`, hash de integridade, número de links).<br>• `index_block_id: Optional[int]` — ID do bloco de índice quando alocação indexada. |
-| **Responsabilidades** | Centralizar metadados POSIX, registrar quais blocos físicos pertencem ao arquivo e manter integridade de tamanho vs. alocação. |
-| **Relacionamentos** | Referenciado por `Node`; aponta para múltiplos `DiskBlock`; agrega `ACL`. |
+| **Atributos** | • `inode_id: int` — Identificador numérico único do i-node na tabela.<br>• `file_size: int` — Tamanho real do conteúdo em bytes.<br>• `permissions: str` — Máscara de permissões POSIX (ex.: `"755"`, `"750"`, `"644"`).<br>• `owner: str` — Nome do usuário proprietário.<br>• `group: str` — Nome do grupo associado.<br>• `allocated_blocks: List[int]` — Lista de IDs numéricos de blocos de dados (`block_id`).<br>• `allocation_strategy: AllocationStrategy` — Enum (`CONTIGUOUS`, `LINKED_FAT`, `INDEXED`).<br>• `index_block_id: Optional[int]` — ID do bloco de índice dedicado (quando alocação indexada).<br>• `is_encrypted: bool` — Flag indicando se o conteúdo dos blocos está cifrado.<br>• `integrity_hash: Optional[str]` — Checksum SHA-256 de referência do arquivo. |
+| **Responsabilidades** | Centralizar metadados POSIX e rastrear os IDs de blocos alocados na camada de armazenamento via `BlockDevicePort`. |
+| **Relacionamentos** | Mantido na tabela de i-nodes de `FileSystem`; referencia blocos gerenciados por `BlockDevicePort`. |
 
 ---
 
-### 2.3. `DiskBlock` (Bloco Físico Simulado)
+### 3.3. Métricas de Armazenamento no `FileSystem`
+Para garantir transparência entre dados e sobrecarga estrutural:
+1. **Espaço Ocupado pelos Dados (`data_space_used`):** Soma dos tamanhos reais (`file_size`) de todos os arquivos.
+2. **Sobrecarga de Metadados (`metadata_overhead`):** Espaço consumido por blocos de índice dedicados ($\text{qtd\_blocos\_indice} \times 4096\text{ bytes}$) somado à tabela de metadados de i-nodes.
+3. **Ocupação Física Total (`total_physical_used`):** Total de blocos de dados alocados mais blocos de índice multiplicados por $4.096\text{ bytes}$.
+4. **Fragmentação Interna:** Calculada por arquivo como $(\text{blocos\_dados} \times 4096) - \text{file\_size}$.
+5. **Fragmentação Externa:** Métricas separadas:
+   - *Geral do Disco:* Total de bytes livres dispersos em blocos não contíguos que impedem alocações contíguas de tamanho $K$.
+   - *Por Arquivo na Alocação Indexada:* Reportada oficialmente como $0\text{ bytes}$ (pois a alocação indexada aproveita blocos livres dispersos sem exigir contiguidade física).
+
+---
+
+## 4. SUBSISTEMA DE ENTRADA E SAÍDA (I/O) E ARMAZENAMENTO
+
+### 4.1. `DiskBlock` (Propriedade Exclusiva da Camada de Storage)
 | Campo | Especificação |
 |---|---|
 | **Classe** | `DiskBlock` |
-| **Subsistema** | `filesystem` / `io` |
-| **Atributos** | • `block_id: int` — Endereço Lógico do Bloco (LBA).<br>• `capacity: int` — Capacidade fixa do bloco em bytes (padrão: `4096` bytes).<br>• `used_space: int` — Bytes efetivamente gravados na carga útil.<br>• `data: bytearray` — Array de bytes em memória simulando o setor de armazenamento.<br>• `owner_inode: Optional[int]` — ID do i-node proprietário (`None` se livre).<br>• `block_status: BlockStatus` — Enum (`FREE`, `ALLOCATED`, `BAD`, `PARITY`).<br>• `checksum: str` — Hash SHA-256 da carga útil para verificação de integridade.<br>• `next_block_id: Optional[int]` — Ponteiro para o próximo bloco (utilizado na Alocação Encadeada / FAT). |
-| **Responsabilidades** | Armazenar dados binários isolados na memória do Python, verificar saturação de capacidade e calcular integridade. |
-| **Relacionamentos** | Pertence a um `PhysicalDisk` ou `RAIDArray`; referenciado por um `Inode`. |
+| **Subsistema** | `io` (Camada de Armazenamento) |
+| **Atributos** | • `block_id: int` — Endereço Lógico do Bloco (LBA).<br>• `capacity: int` — Capacidade fixa do bloco (padrão: `4096` bytes).<br>• `used_space: int` — Bytes efetivamente ocupados pela carga útil gravada.<br>• `data: bytearray` — Array de bytes em memória simulando o setor de armazenamento físico.<br>• `owner_inode: Optional[int]` — ID do i-node proprietário (`None` se livre).<br>• `block_status: BlockStatus` — Enum (`FREE`, `ALLOCATED`, `BAD`, `PARITY`).<br>• `checksum: str` — Hash SHA-256 do conteúdo do bloco.<br>• `next_block_id: Optional[int]` — Ponteiro para encadeamento em alocação FAT. |
+| **Responsabilidades** | Manter os dados binários isolados na memória do Python. **Pertence unicamente à infraestrutura de armazenamento**. |
 
 ---
 
-### 2.4. `FileSystem` (Gerenciador do Sistema de Arquivos)
+### 4.2. `PhysicalDisk` e `RAIDArray`
 | Campo | Especificação |
 |---|---|
-| **Classe** | `FileSystem` |
-| **Subsistema** | `filesystem` |
-| **Atributos** | • `root: DirectoryNode` — Diretório raiz `/`.<br>• `block_size: int` — Tamanho padrão de bloco em bytes (padrão `4096`).<br>• `total_blocks: int` — Quantidade total de blocos simulados disponíveis.<br>• `inode_table: Dict[int, Inode]` — Tabela indexada de i-nodes ativos.<br>• `allocation_strategy: AllocationStrategy` — Estratégia global corrente de alocação.<br>• `free_block_bitmap: List[bool]` — Bitmap de blocos livres/ocupados.<br>• `fat_table: Dict[int, Optional[int]]` — Tabela de alocação de arquivos (quando no modo FAT). |
-| **Responsabilidades** | Administrar o espaço de armazenamento de arquivos, formatar sistema de arquivos, calcular fragmentação interna e externa, e sincronizar metadados. |
-| **Relacionamentos** | Agrega `Node`, gerencia `Inode` e orquestra requisições via `IOManager`. |
-
----
-
-## 3. SUBSISTEMA DE ENTRADA E SAÍDA (I/O) E ARMAZENAMENTO
-
-### 3.1. `PhysicalDisk` (Disco Físico Simulado)
-| Campo | Especificação |
-|---|---|
-| **Classe** | `PhysicalDisk` |
+| **Classes** | `PhysicalDisk`, `RAIDArray` |
 | **Subsistema** | `io` |
-| **Atributos** | • `disk_id: int` — Identificador numérico do disco.<br>• `total_blocks: int` — Número total de blocos da unidade.<br>• `tracks: int` — Número de cilindros/trilhas (ex.: 200 trilhas).<br>• `current_head_position: int` — Posição atual do cabeçote de leitura/escrita (número da trilha).<br>• `disk_type: DiskType` — Enum (`HDD`, `SSD`).<br>• `failed: bool` — Flag indicando falha física da unidade.<br>• `blocks: Dict[int, DiskBlock]` — Mapeamento de blocos físicos em memória.<br>• `write_cycles: Dict[int, int]` — Contador de gravações por bloco (para SSD Wear Leveling). |
-| **Responsabilidades** | Simular o comportamento eletromecânico (posição do cabeçote, busca de trilha) ou de estado sólido (ciclos de desgaste). |
-| **Relacionamentos** | Agrupado dentro de um `RAIDArray` ou gerenciado diretamente pelo `IOManager`. |
+| **Atributos de PhysicalDisk** | • `disk_id: int` — Identificador numérico do disco.<br>• `total_blocks: int` — Total de blocos do disco.<br>• `tracks: int` — Total de cilindros/trilhas (padrão: 200).<br>• `current_head_position: int` — Trilha atual do cabeçote.<br>• `disk_type: DiskType` — Enum (`HDD`, `SSD`).<br>• `failed: bool` — Flag de falha física simulada.<br>• `blocks: Dict[int, DiskBlock]` — Coleção de blocos físicos mantidos na unidade.<br>• `write_cycles: Dict[int, int]` — Contador de escritas para SSD Wear Leveling. |
+| **Atributos de RAIDArray** | • `raid_level: RAIDLevel` — Enum (`RAID0`, `RAID1`, `RAID4`, `RAID5`).<br>• `physical_disks: List[PhysicalDisk]` — Discos integrantes do arranjo.<br>• `stripe_size: int` — Tamanho do stripe (padrão: 1 bloco = 4096 bytes).<br>• `status: RAIDStatus` — Enum (`OPTIMAL`, `DEGRADED`, `FAILED`). |
+| **Responsabilidades** | Simular a movimentação mecânica de cabeçote, cálculo de desgaste, paridade XOR e reconstrução transparente de blocos. |
 
 ---
 
-### 3.2. `RAIDArray` (Controlador de Arranjo Redundante)
+### 4.3. `IORequest` e `DiskScheduler`
 | Campo | Especificação |
 |---|---|
-| **Classe** | `RAIDArray` |
+| **Classes** | `IORequest`, `DiskScheduler` |
 | **Subsistema** | `io` |
-| **Atributos** | • `raid_level: RAIDLevel` — Enum (`RAID0`, `RAID1`, `RAID4`, `RAID5`).<br>• `physical_disks: List[PhysicalDisk]` — Lista ordenada de discos físicos que compõem o arranjo.<br>• `stripe_size: int` — Tamanho do stripe em blocos ou bytes.<br>• `parity_blocks: Dict[int, int]` — Mapeamento de endereço de paridade para disco responsável.<br>• `status: RAIDStatus` — Enum (`OPTIMAL`, `DEGRADED`, `FAILED`). |
-| **Responsabilidades** | Intercalar blocos lógicos entre discos físicos, calcular e gravar paridade XOR, detectar unidades falhas e reconstruir dados (*rebuild*). |
-| **Relacionamentos** | Contém instâncias de `PhysicalDisk`; fornece interface de bloco para o `FileSystem`. |
+| **Atributos de IORequest** | • `request_id: int` — ID sequencial da requisição.<br>• `operation_type: IOOperationType` — Enum (`READ`, `WRITE`).<br>• `target_block: int` — Bloco de destino.<br>• `target_track: int` — Trilha física onde o bloco reside.<br>• `data: Optional[bytearray]` — Carga útil de dados.<br>• `priority: IOPriority` — Enum (`LOW`, `NORMAL`, `HIGH`, `KERNEL`).<br>• `status: IORequestStatus` — Enum (`PENDING`, `COMPLETED`, `FAILED`). |
+| **Atributos de DiskScheduler** | • `algorithm: SchedulingAlgorithm` — Enum (`FCFS`, `SSTF`, `SCAN`, `CSCAN`).<br>• `request_queue: List[IORequest]` — Fila de requisições pendentes.<br>• `total_head_movement: int` — Acumulador da distância percorrida pelo braço em trilhas. |
+| **Responsabilidades** | Reordenar a fila de requisições mecânicas para minimizar o deslocamento do cabeçote. |
 
 ---
 
-### 3.3. `IORequest` (Requisição de E/S)
+## 5. SUBSISTEMA DE SEGURANÇA E PROTEÇÃO
+
+### 5.1. `User` e Credenciais
 | Campo | Especificação |
 |---|---|
-| **Classe** | `IORequest` |
-| **Subsistema** | `io` |
-| **Atributos** | • `request_id: int` — Identificador sequencial da requisição.<br>• `operation_type: IOOperationType` — Enum (`READ`, `WRITE`).<br>• `target_block: int` — Bloco LBA de destino.<br>• `target_track: int` — Trilha física onde o bloco reside.<br>• `data: Optional[bytearray]` — Carga útil a ser gravada (ou buffer a preencher).<br>• `priority: IOPriority` — Enum (`LOW`, `NORMAL`, `HIGH`, `KERNEL`).<br>• `status: IORequestStatus` — Enum (`PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`).<br>• `timestamp: float` — Momento da criação da requisição. |
-| **Responsabilidades** | Encapsular os parâmetros de uma operação de leitura/escrita para enfileiramento e escalonamento. |
-| **Relacionamentos** | Inserido na fila de `DiskScheduler`. |
-
----
-
-### 3.4. `DiskScheduler` (Escalonador de Disco)
-| Campo | Especificação |
-|---|---|
-| **Classe** | `DiskScheduler` |
-| **Subsistema** | `io` |
-| **Atributos** | • `algorithm: SchedulingAlgorithm` — Enum (`FCFS`, `SSTF`, `SCAN`, `CSCAN`).<br>• `request_queue: List[IORequest]` — Fila de requisições pendentes.<br>• `total_head_movement: int` — Acumulador da distância total percorrida pelo cabeçote (em trilhas).<br>• `current_direction: ScanDirection` — Enum (`UP`, `DOWN`) para algoritmos SCAN/C-SCAN. |
-| **Responsabilidades** | Reordenar a fila de requisições segundo o algoritmo selecionado visando otimizar a movimentação mecânica. |
-| **Relacionamentos** | Opera sobre requisições `IORequest` e atualiza a posição do cabeçote em `PhysicalDisk`. |
-
----
-
-## 4. SUBSISTEMA DE SEGURANÇA E PROTEÇÃO
-
-### 4.1. `User` e `Group` (Identidades do Sistema)
-| Campo | Especificação |
-|---|---|
-| **Classes** | `User`, `Group` |
+| **Classe** | `User` |
 | **Subsistema** | `security` |
-| **Atributos de User** | • `user_id: int` — UID POSIX simulado (0 para root).<br>• `username: str` — Nome do usuário.<br>• `password_hash: bytes` — Hash criptográfico da senha gerado por PBKDF2.<br>• `salt: bytes` — Sal de 16 ou 32 bytes gerado por `secrets.token_bytes`.<br>• `groups: List[str]` — Lista de nomes de grupos aos quais o usuário pertence.<br>• `privilege_mode: PrivilegeMode` — Enum (`USER_MODE`, `KERNEL_MODE`). |
-| **Atributos de Group** | • `group_id: int` — GID numérico.<br>• `group_name: str` — Nome do grupo (ex.: `admin`, `devs`, `users`).<br>• `members: List[str]` — Lista de nomes de usuários membros do grupo. |
-| **Responsabilidades** | Manter a identidade, credenciais seguras e escopo de grupos de cada usuário. |
-| **Relacionamentos** | `User` associado a múltiplos `Group`; referenciados em `ACL` e `AuditEntry`. |
+| **Atributos** | • `user_id: int` — UID POSIX (0 para root).<br>• `username: str` — Nome do usuário.<br>• `password_hash: bytes` — Hash derivado por PBKDF2-HMAC-SHA256.<br>• `salt: bytes` — Sal criptográfico individual de 16 bytes (`secrets.token_bytes(16)`).<br>• `iterations: int` — Número de iterações PBKDF2 (padrão: 600.000, configurável por credencial).<br>• `groups: List[str]` — Lista de grupos do usuário.<br>• `privilege_mode: PrivilegeMode` — Enum (`USER_MODE`, `KERNEL_MODE`). |
+| **Responsabilidades** | Manter credenciais seguras e histórico de iterações alinhado ao OWASP Cheat Sheet. |
 
 ---
 
-### 4.2. `ACL` (Lista de Controle de Acesso POSIX)
+### 5.2. `EncryptedPayload` (Estrutura de Criptografia AES-256-GCM)
 | Campo | Especificação |
 |---|---|
-| **Classe** | `ACL` |
-| **Subsistema** | `security` |
-| **Atributos** | • `owner_permissions: int` — Máscara binária de 3 bits para proprietário (`r=4, w=2, x=1`).<br>• `group_permissions: int` — Máscara binária de 3 bits para o grupo.<br>• `others_permissions: int` — Máscara binária de 3 bits para outros usuários.<br>• `octal_representation: str` — String de 3 dígitos (ex.: `"755"`, `"750"`, `"644"`). |
-| **Responsabilidades** | Validar permissões de leitura, escrita e execução para um dado usuário/grupo, converter representações textuais, simbólicas e numéricas octais. |
-| **Relacionamentos** | Integrada a cada `Inode`. |
+| **Classe** | `EncryptedPayload` |
+| **Subsistema** | `security.crypto` |
+| **Atributos** | • `nonce: bytes` — Vetor de inicialização/nonce exclusivo de 12 bytes (96 bits).<br>• `tag: bytes` — Tag de autenticação AEAD de 16 bytes (128 bits).<br>• `ciphertext: bytes` — Dados do arquivo cifrados com AES-256.<br>• `key_id: str` — Identificador da chave derivada utilizada. |
+| **Layout no Bloco** | O bloco físico armazena o empacotamento: `[12 bytes Nonce] + [16 bytes Tag] + [Ciphertext]`. |
+| **Responsabilidades** | Garantir sigilo e autenticidade da carga útil, prevenindo adulteração silenciosa e ataques de repetição. |
 
 ---
 
-### 4.3. `SecurityManager` e `AuditLog`
+### 5.3. `IntegrityRecord` (Registro de Integridade Protegido)
 | Campo | Especificação |
 |---|---|
-| **Classes** | `SecurityManager`, `AuditLog`, `AuditEntry` |
-| **Subsistema** | `security` |
-| **Atributos de SecurityManager** | • `users: Dict[str, User]` — Base de usuários registrados.<br>• `groups: Dict[str, Group]` — Base de grupos registrados.<br>• `audit_log: AuditLog` — Instância do gerenciador de logs de auditoria.<br>• `active_user: Optional[User]` — Usuário com sessão ativa no simulador. |
-| **Atributos de AuditEntry** | • `event_id: int` — ID sequencial do log.<br>• `timestamp: float` — Timestamp do evento.<br>• `event_type: AuditEventType` — Enum (`LOGIN_SUCCESS`, `LOGIN_FAIL`, `ACCESS_DENIED`, `FILE_WRITE`, etc.).<br>• `username: str` — Usuário envolvido.<br>• `target_resource: str` — Recurso alvo da ação.<br>• `details: str` — Descrição do evento e resultado. |
-| **Responsabilidades** | Controlar sessões ativas, autenticar logins, fiscalizar ACLs e garantir trilha de auditoria inviolável. |
-| **Relacionamentos** | Interage com todos os subsistemas através do Kernel. |
+| **Classe** | `IntegrityRecord` |
+| **Subsistema** | `security.integrity` |
+| **Atributos** | • `resource_path: str` — Caminho do arquivo monitorado.<br>• `expected_sha256: str` — Hash SHA-256 esperado da carga útil.<br>• `hmac_signature: str` — Assinatura HMAC gerada pelo Kernel com chave raiz protegida.<br>• `last_verified: float` — Timestamp da última validação íntegra. |
+| **Responsabilidades** | Prevenir adulterações simultâneas de bloco e metadados: a assinatura HMAC do Kernel detecta se um invasor alterou tanto o bloco quanto o hash de referência no i-node. |
 
 ---
 
-## 5. SUBSISTEMA DE GERENCIAMENTO DE MEMÓRIA
+## 6. SUBSISTEMA DE GERENCIAMENTO DE MEMÓRIA REAL E VIRTUAL
 
-### 5.1. `MemorySegment` (Segmento da Área Reservada Contígua)
+### 6.1. `PageOrigin` (Enum de Origem Válida de Páginas)
+| Nome | Significado | Comportamento no Page Fault |
+|---|---|---|
+| `PROCESS_IMAGE` | Código executável / dados estáticos do binário. | Carregado do segmento de processo simulado no disco. |
+| `ZERO_FILL_ON_DEMAND` | Heap ou pilha virgem (não alocada anteriormente). | Moldura é preenchida diretamente com zeros na RAM (sem I/O de Swap!). |
+| `SWAP_STORAGE` | Página que já residiu na RAM e foi descarregada por substituição. | Carregada a partir do slot correspondente da partição de Swap. |
+
+---
+
+### 6.2. `PageTableEntry` (Entrada da Tabela de Páginas)
+| Campo | Especificação |
+|---|---|
+| **Classe** | `PageTableEntry` |
+| **Subsistema** | `memory` |
+| **Atributos** | • `logical_page: int` — Número da página virtual ($p$).<br>• `frame_id: Optional[int]` — Número da moldura física ($f$) onde reside (`None` se ausente).<br>• `present: bool` — Bit de presença (`True` na RAM; `False` aciona Page Fault).<br>• `dirty: bool` — Bit de modificação (`True` se alterada em RAM desde o carregamento).<br>• `referenced: bool` — Bit de referência para Segunda Chance (Clock).<br>• `last_access: float` — Timestamp de acesso recente para LRU.<br>• `page_origin: PageOrigin` — Origem válida da página para resolução de Page Fault.<br>• `swap_slot_id: Optional[int]` — Número do slot de swap (quando `page_origin == SWAP_STORAGE`). |
+| **Responsabilidades** | Mapear o endereço virtual e fornecer metadados para reposição e recuperação de faltas. |
+
+---
+
+### 6.3. `MemorySegment` (Área Reservada Contígua)
 | Campo | Especificação |
 |---|---|
 | **Classe** | `MemorySegment` |
 | **Subsistema** | `memory` |
-| **Atributos** | • `segment_id: int` — Identificador único do segmento.<br>• `process_id: Optional[int]` — PID associado (`None` se o segmento for um bloco livre / buraco).<br>• `process_name: Optional[str]` — Nome do driver ou processo crítico.<br>• `start_address: int` — Endereço inicial em bytes ou KB na área reservada.<br>• `end_address: int` — Endereço final do segmento.<br>• `size: int` — Tamanho do segmento em KB.<br>• `status: SegmentStatus` — Enum (`FREE`, `ALLOCATED`). |
-| **Responsabilidades** | Representar blocos contíguos de memória do núcleo e drivers; quantificar fragmentação externa. |
-| **Relacionamentos** | Pertence à lista de segmentos da Área Reservada de `PhysicalMemory`. |
+| **Atributos** | • `segment_id: int` — ID do segmento.<br>• `process_name: Optional[str]` — Nome do processo crítico/driver (ex.: `"Kernel_DiskDriver"`).<br>• `start_address: int` — Endereço inicial em KB.<br>• `end_address: int` — Endereço final em KB.<br>• `size: int` — Tamanho em KB.<br>• `status: SegmentStatus` — Enum (`ALLOCATED`, `FREE`). |
+| **Responsabilidades** | Representar blocos contíguos de memória do núcleo e diagnosticar fragmentação externa. |
 
 ---
 
-### 5.2. `PageTable` e `PageTableEntry` (Paginação Dinâmica)
+### 6.4. `SwapManager`
 | Campo | Especificação |
 |---|---|
-| **Classes** | `PageTable`, `PageTableEntry` |
-| **Subsistema** | `memory` |
-| **Atributos de PageTableEntry** | • `logical_page: int` — Número da página virtual ($p$).<br>• `frame_id: Optional[int]` — Número da moldura física ($f$) onde a página reside (`None` se em swap).<br>• `present: bool` — Bit de presença (`True` na RAM, `False` falta de página / swap).<br>• `dirty: bool` — Bit de modificação (`True` se alterada em RAM desde o carregamento).<br>• `referenced: bool` — Bit de referência para o algoritmo de Segunda Chance.<br>• `last_access: float` — Timestamp de acesso recente para o algoritmo LRU. |
-| **Atributos de PageTable** | • `process_id: int` — PID do processo proprietário da tabela.<br>• `entries: Dict[int, PageTableEntry]` — Mapeamento $p \to \text{PageTableEntry}$. |
-| **Responsabilidades** | Manter o estado de mapeamento de memória virtual de cada processo e viabilizar algoritmos de reposição. |
-| **Relacionamentos** | Pertence a um `Process`; referencia instâncias de `Frame`. |
-
----
-
-### 5.3. `Frame` (Moldura de Memória Física)
-| Campo | Especificação |
-|---|---|
-| **Classe** | `Frame` |
-| **Subsistema** | `memory` |
-| **Atributos** | • `frame_id: int` — Número identificador da moldura física na RAM dinâmica.<br>• `start_address: int` — Endereço físico base da moldura em bytes.<br>• `size: int` — Tamanho da moldura (padrão: `4096` bytes).<br>• `page_id: Optional[int]` — Página lógica atualmente hospedada.<br>• `process_id: Optional[int]` — PID do processo ocupante (`None` se livre).<br>• `occupied: bool` — Flag de ocupação da moldura.<br>• `data: bytearray` — Armazenamento binário do conteúdo da página na RAM física simulada. |
-| **Responsabilidades** | Hospedar uma página física de memória em tempo de execução. |
-| **Relacionamentos** | Gerenciado pela lista de molduras de `PhysicalMemory`. |
-
----
-
-### 5.4. `MemoryManager` e `SwapManager`
-| Campo | Especificação |
-|---|---|
-| **Classes** | `MemoryManager`, `SwapManager` |
-| **Subsistema** | `memory` |
-| **Atributos de MemoryManager** | • `reserved_memory_size: int` — Tamanho total da área reservada (padrão `4096` KB / 4 MB).<br>• `dynamic_memory_size: int` — Tamanho total da área paginada em frames.<br>• `reserved_segments: List[MemorySegment]` — Lista de segmentos da área reservada.<br>• `page_tables: Dict[int, PageTable]` — Tabelas de páginas ativas por PID.<br>• `frames: List[Frame]` — Conjunto de molduras de memória da área dinâmica.<br>• `replacement_algorithm: ReplacementAlgorithm` — Enum (`LRU`, `SECOND_CHANCE`).<br>• `swap_manager: SwapManager` — Subsistema de área de troca secundária. |
-| **Atributos de SwapManager** | • `total_swap_slots: int` — Total de slots de troca disponíveis.<br>• `swap_table: Dict[Tuple[int, int], int]` — Mapeamento `(pid, page_id) -> slot_id`.<br>• `swap_storage: Dict[int, bytearray]` — Carga binária de páginas descarregadas da RAM. |
-| **Responsabilidades** | Tradução de endereços virtuais, detecção e resolução de Page Fault, execução de substituição de páginas e desfragmentação via `memory_compact`. |
-| **Relacionamentos** | Orquestra `PhysicalMemory`, `PageTable`, interage com `IOManager` para swapping. |
-
----
-
-## 6. SUBSISTEMA DE PROCESSOS E CONTROLE DE EXECUÇÃO
-
-### 6.1. `Process` (Process Control Block — PCB)
-| Campo | Especificação |
-|---|---|
-| **Classe** | `Process` |
-| **Subsistema** | `process` |
-| **Atributos** | • `pid: int` — Process ID sequencial.<br>• `name: str` — Nome identificador do processo ou driver.<br>• `size: int` — Tamanho de memória solicitado (em KB ou bytes).<br>• `state: ProcessState` — Enum (`NEW`, `READY`, `RUNNING`, `BLOCKED`, `TERMINATED`).<br>• `is_reserved: bool` — Flag indicando se é processo crítico alocado na Área Reservada Contígua.<br>• `page_table: Optional[PageTable]` — Tabela de páginas associada (se dinâmico).<br>• `segment_id: Optional[int]` — ID do segmento de memória reservada (se contíguo).<br>• `cpu_time: int` — Ciclos de execução consumidos. |
-| **Responsabilidades** | Manter o estado do processo simulado para controle de ciclo de vida. |
-| **Relacionamentos** | Gerenciado por `ProcessManager`; possui recursos em `MemoryManager`. |
-
----
-
-## 7. SUBSISTEMA DE INTERFACE CLI E CONTEXTO DE EXECUÇÃO
-
-### 7.1. `CommandContext` e `CommandResult`
-| Campo | Especificação |
-|---|---|
-| **Classes** | `CommandContext`, `CommandResult` |
-| **Subsistema** | `cli` |
-| **Atributos de CommandContext** | • `raw_input: str` — Linha digitada no shell.<br>• `command_name: str` — Nome do comando identificado.<br>• `args: List[str]` — Argumentos posicionais.<br>• `flags: Dict[str, Any]` — Argumentos nomeados/flags (ex.: `--reserved`, `-l`).<br>• `active_user: User` — Usuário da sessão corrente.<br>• `cwd: str` — Diretório de trabalho atual no VFS. |
-| **Atributos de CommandResult** | • `success: bool` — `True` em caso de sucesso; `False` em erro.<br>• `output_message: str` — Texto formatado de saída para o terminal.<br>• `error_message: Optional[str]` — Mensagem detalhada de falha ou exceção.<br>• `data_payload: Optional[Dict[str, Any]]` — Dados estruturados resultantes da operação para validação programática. |
-| **Responsabilidades** | Desacoplar a interpretação de comandos da lógica do Kernel e padronizar o envio de respostas. |
-| **Relacionamentos** | Produzido pelo `CommandParser`; consumido pelo `Shell` e pelos comandos. |
+| **Classe** | `SwapManager` |
+| **Subsistema** | `memory` / `storage` |
+| **Atributos** | • `total_slots: int` — Quantidade de slots de troca disponíveis.<br>• `slot_size: int` — Tamanho do slot (padrão: 4096 bytes).<br>• `slots_in_use: Dict[int, Tuple[int, int]]` — Mapeamento `slot_id -> (pid, logical_page)`.<br>• `block_device: BlockDevicePort` — Dispositivo de blocos onde o swap é persistido. |
+| **Responsabilidades** | Alocar e liberar slots de swap e coordenar operações de leitura/escrita de páginas descarregadas via `BlockDevicePort`. |

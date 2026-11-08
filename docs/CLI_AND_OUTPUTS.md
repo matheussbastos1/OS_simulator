@@ -1,7 +1,7 @@
 # DICIONÁRIO OFICIAL DA CLI E PADRÕES DE SAÍDA — OS SIMULATOR
 
-> **Status:** Especificação Oficial (Fase 0)  
-> **Objetivo:** Estabelecer o contrato formal da interface de linha de comando (CLI), sintaxe de comandos, permissões, parâmetros e fidelidade visual aos exemplos de saída do simulador.
+> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
+> **Objetivo:** Estabelecer o contrato formal da interface de linha de comando (CLI), respeitando rigorosamente a sintaxe oficial fornecida pelo professor e documentando parâmetros, tipos, unidades e padrões visuais.
 
 ---
 
@@ -10,198 +10,178 @@
 1. **Prompt Interativo Padrão:**  
    `[usuario@ubuntu-simulator:caminho_atual]$ ` (para usuários comuns).  
    `[root@ubuntu-simulator:caminho_atual]# ` (para o superusuário root).
-2. **Linguagem das Mensagens:** Saídas visuais, títulos, relatórios de diagnóstico e descrições de erro devem ser impressos em língua portuguesa, preservando terminologias técnicas consolidadas (ex.: *i-node*, *frame*, *page fault*, *cluster*, *swap*, *wear leveling*, *ACL*).
-3. **Tratamento de Argumentos:** Argumentos contendo espaços devem ser passados entre aspas duplas (`"conteudo do arquivo"`).
+2. **Compatibilidade Oficial e Aliases:** A sintaxe estabelecida pelo professor é a **interface oficial obrigatória**. Formas alternativas e simplificadas são aceitas exclusivamente como *aliases* documentados, sem substituir a sintaxe primordial.
+3. **Unidades de Memória e Tamanho:** Os parâmetros aceitam especificações com sufixos de grandeza case-insensitive (`KB`, `MB`, `B`), convertidos internamente em bytes ($1\text{ KB} = 1.024\text{ bytes}$, $1\text{ MB} = 1.048.576\text{ bytes}$).
+4. **Linguagem das Mensagens:** Saídas visuais, títulos, diagnósticos e erros são exibidos em língua portuguesa, preservando termos técnicos consolidados de SO (ex.: *i-node*, *frame*, *page fault*, *cluster*, *swap*, *wear leveling*, *ACL*).
 
 ---
 
-## 2. CATÁLOGO COMPLETO DE COMANDOS DA CLI
+## 2. CATÁLOGO OFICIAL DE COMANDOS DA CLI
 
 ### 2.1. `mkdir`
-- **Sintaxe:** `mkdir <caminho_diretorio>`
-- **Parâmetros Obrigatórios:** `<caminho_diretorio>` (caminho relativo ou absoluto).
-- **Parâmetros Opcionais:** `-p` (criar diretórios intermediários se inexistentes).
-- **Pré-condições:** O diretório pai deve existir; não pode existir nó com mesmo nome.
-- **Permissões Necessárias:** Permissão de escrita (`w`) e execução (`x`) no diretório pai.
-- **Subsistema Responsável:** `filesystem` (VFS).
-- **Resultado Esperado:** Diretório criado na hierarquia com i-node associado e permissões padrão (0o755).
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada para criar diretório em '<pai>'.`
-  - `Erro: Diretório '<caminho>' já existe.`
-  - `Erro: Caminho pai inexistente.`
+- **Sintaxe Oficial:** `mkdir <caminho_diretorio>`
+- **Parâmetros Obrigatórios:** `<caminho_diretorio>` (caminho absoluto ou relativo).
+- **Parâmetros Opcionais:** `-p` (criação recursiva de diretórios pais).
+- **Pré-condições:** Diretório pai existente com permissão de escrita (`w`) e execução (`x`).
+- **Subsistema:** `filesystem` (VFS).
+- **Saída de Sucesso:** Confirmação da criação do diretório e i-node atribuído.
 
 ---
 
 ### 2.2. `create`
-- **Sintaxe:** `create <caminho_arquivo> [--strategy=<contiguous|fat|indexed>]`
+- **Sintaxe Oficial:** `create <caminho_arquivo> [--size <tamanho>] [--strategy <contiguous|fat|indexed>]`
+- **Exemplo do Professor:** `create /sistema/logs/app.log --size 10KB`
 - **Parâmetros Obrigatórios:** `<caminho_arquivo>`.
-- **Parâmetros Opcionais:** `--strategy` (define a estratégia de alocação; padrão: `indexed`).
-- **Pré-condições:** O diretório pai deve existir.
-- **Permissões Necessárias:** Permissão `w` e `x` no diretório pai.
-- **Subsistema Responsável:** `filesystem`.
-- **Resultado Esperado:** Criação de arquivo vazio (tamanho 0 bytes) com novo `Inode` registrado.
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada no diretório pai.`
-  - `Erro: Arquivo já existe.`
-  - `Erro: Tabela de i-nodes esgotada.`
+- **Parâmetros Opcionais:**
+  - `--size <tamanho>`: Reserva inicial de espaço (ex.: `10KB`, `4096B`). Se omitido, cria arquivo vazio (0 bytes).
+  - `--strategy <estrategia>`: Estratégia de alocação (`contiguous`, `fat`, `indexed`; padrão: `indexed`).
+- **Pré-condições:** Diretório pai existente com permissão `w`. Espaço em disco suficiente se `--size` informado.
+- **Subsistema:** `filesystem` via `BlockDevicePort`.
+- **Saída de Sucesso:** Mensagem indicando criação, i-node e blocos alocados se `--size` foi especificado.
 
 ---
 
 ### 2.3. `write_file`
-- **Sintaxe:** `write_file <caminho_arquivo> "<conteudo>"`
+- **Sintaxe Oficial:** `write_file <caminho_arquivo> "<conteudo>"`
+- **Exemplo do Professor:** `write_file /sistema/logs/app.log "Novo Registro"`
 - **Parâmetros Obrigatórios:** `<caminho_arquivo>`, `"<conteudo>"`.
-- **Parâmetros Opcionais:** `--append` (anexar ao invés de sobrescrever).
-- **Pré-condições:** O arquivo deve existir (ou ser criado implicitamente) e o usuário deve ter permissão.
-- **Permissões Necessárias:** Permissão `w` no arquivo.
-- **Subsistema Responsável:** Integração `security` $\to$ `filesystem` $\to$ `io` $\to$ `raid`.
-- **Resultado Esperado:** Gravação física simulada nos blocos, atualização de metadados do i-node, acionamento do escalonador de E/S e exibição de relatório de gravação com blocos alocados e fragmentação calculada.
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada para escrita no arquivo '<caminho>'.`
-  - `Erro: Espaço insuficiente no disco simulado.`
+- **Parâmetros Opcionais:** `--append` (anexar ao fim ao invés de truncar).
+- **Pré-condições:** Permissão de escrita (`w`) no arquivo ou diretório pai.
+- **Subsistema:** Integração `AuthorizationPort` $\to$ `filesystem` $\to$ `BlockDevicePort`.
+- **Saída de Sucesso:** Relatório com bytes gravados, blocos alocados e cálculo de fragmentação interna.
 
 ---
 
 ### 2.4. `read_file`
-- **Sintaxe:** `read_file <caminho_arquivo>`
+- **Sintaxe Oficial:** `read_file <caminho_arquivo>`
+- **Exemplo do Professor:** `read_file /sistema/logs/app.log`
 - **Parâmetros Obrigatórios:** `<caminho_arquivo>`.
-- **Parâmetros Opcionais:** `--hex` (exibir dump hexadecimal dos blocos).
-- **Pré-condições:** Arquivo deve existir.
-- **Permissões Necessárias:** Permissão de leitura (`r`) no arquivo.
-- **Subsistema Responsável:** `security` $\to$ `filesystem` $\to$ `io`.
-- **Resultado Esperado:** Exibição do conteúdo do arquivo, descriptografia automática caso protegido e log de auditoria.
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada para leitura no arquivo '<caminho>'.`
-  - `Erro: Arquivo '<caminho>' não encontrado.`
+- **Parâmetros Opcionais:** `--hex` (exibe dump binário/hexadecimal dos blocos).
+- **Pré-condições:** Arquivo existente e permissão de leitura (`r`).
+- **Subsistema:** `AuthorizationPort` $\to$ `filesystem` $\to$ `BlockDevicePort`.
+- **Saída de Sucesso:** Exibição do conteúdo do arquivo na tela.
 
 ---
 
 ### 2.5. `fs_status`
-- **Sintaxe:** `fs_status [--detailed]`
-- **Parâmetros Obrigatórios:** Nenhum.
-- **Parâmetros Opcionais:** `--detailed` (exibe o mapa de todos os blocos individuais).
-- **Pré-condições:** Sistema de arquivos montado.
-- **Permissões Necessárias:** Qualquer usuário autenticado.
-- **Subsistema Responsável:** `filesystem`.
-- **Resultado Esperado:** Relatório de capacidade total, blocos ocupados, blocos livres, i-nodes utilizados, taxa de fragmentação interna e externa acumulada.
+- **Sintaxe Oficial:** `fs_status [--details]`
+- **Exemplo do Professor:** `fs_status --details`
+- **Parâmetros Opcionais:** `--details` (exibe mapa detalhado de blocos e tabela de i-nodes). *Alias aceito:* `--detailed`.
+- **Subsistema:** `filesystem`.
+- **Saída de Sucesso:** Relatório com blocos totais, ocupados, livres, i-nodes e métricas de fragmentação.
 
 ---
 
 ### 2.6. `login`
-- **Sintaxe:** `login <username>`
-- **Parâmetros Obrigatórios:** `<username>`.
-- **Parâmetros Opcionais:** Nenhum (senha solicitada via prompt seguro).
-- **Pré-condições:** O usuário deve estar cadastrado na base do simulador.
-- **Permissões Necessárias:** Nenhuma prévia.
-- **Subsistema Responsável:** `security`.
-- **Resultado Esperado:** Validação de PBKDF2 com salt, inicialização da sessão com as permissões do usuário e registro no `AuditLog`.
-- **Mensagens de Erro:**
-  - `Erro: Usuário '<username>' não encontrado.`
-  - `Erro: Senha incorreta. Tentativa registrada no log de auditoria.`
+- **Sintaxe Oficial:** `login --user <username>`
+- **Exemplo do Professor:** `login --user carlos`
+- **Parâmetros Obrigatórios:** `--user <username>`. *Alias aceito:* `login <username>`.
+- **Parâmetros Opcionais:** `--password <senha>` (se omitido, solicita senha via prompt oculto no terminal).
+- **Pré-condições:** Usuário cadastrado no simulador.
+- **Subsistema:** `security.auth`.
+- **Saída de Sucesso:** Sessão atualizada para o usuário e evento no `AuditLog`.
 
 ---
 
 ### 2.7. `chmod`
-- **Sintaxe:** `chmod <mascara_octal> <caminho>`
-- **Parâmetros Obrigatórios:** `<mascara_octal>` (ex.: `750`, `644`), `<caminho>`.
-- **Pré-condições:** O recurso deve existir.
-- **Permissões Necessárias:** Proprietário do recurso ou `root`.
-- **Subsistema Responsável:** `security` / `filesystem`.
-- **Resultado Esperado:** Atualização da ACL no i-node e log de auditoria.
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada. Somente o proprietário ou root pode alterar permissões.`
-  - `Erro: Máscara octal inválida. Utilize valores entre 000 e 777.`
+- **Sintaxe Oficial:** `chmod <mascara_octal> <caminho>`
+- **Exemplo:** `chmod 750 /sistema/config.sys`
+- **Parâmetros Obrigatórios:** `<mascara_octal>` (3 dígitos octais de `000` a `777`), `<caminho>`.
+- **Pré-condições:** Usuário solicitante deve ser o proprietário ou `root`.
+- **Subsistema:** `security.acl`.
+- **Saída de Sucesso:** Atualização da ACL do i-node.
 
 ---
 
 ### 2.8. `encrypt_file`
-- **Sintaxe:** `encrypt_file <caminho_arquivo>`
-- **Parâmetros Obrigatórios:** `<caminho_arquivo>`.
-- **Pré-condições:** Arquivo existente com conteúdo.
-- **Permissões Necessárias:** Proprietário do arquivo ou `root`.
-- **Subsistema Responsável:** `security` $\to$ `filesystem` $\to$ `io`.
-- **Resultado Esperado:** Cifragem da carga dos blocos de dados, marcação da flag de criptografia no i-node e registro em auditoria.
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada para criptografar o arquivo.`
-  - `Erro: O arquivo já se encontra criptografado.`
+- **Sintaxe Oficial:** `encrypt_file <caminho_arquivo> --key "<chave>"`
+- **Exemplo do Professor:** `encrypt_file /home/carlos/segredo.txt --key "MinhaChave123"`
+- **Parâmetros Obrigatórios:** `<caminho_arquivo>`, `--key "<chave>"`.
+- **Pré-condições:** Arquivo existente, usuário com permissão de escrita/proprietário.
+- **Subsistema:** `security.crypto` (AES-256-GCM com nonce de 12 bytes e tag de 16 bytes).
+- **Saída de Sucesso:** Cifragem da carga útil nos blocos e atualização da flag `is_encrypted` no i-node.
 
 ---
 
 ### 2.9. `antivirus_scan`
-- **Sintaxe:** `antivirus_scan [<caminho_base>]`
-- **Parâmetros Opcionais:** `<caminho_base>` (padrão `/`).
-- **Pré-condições:** Sistema de arquivos operacional.
-- **Permissões Necessárias:** Privilégio de leitura ou `root`.
-- **Subsistema Responsável:** `security`.
-- **Resultado Esperado:** Varredura de integridade (SHA-256) e busca por assinaturas maliciosas simuladas, gerando relatório de auditoria.
+- **Sintaxe Oficial:** `antivirus_scan [<caminho_base>]`
+- **Exemplo do Professor:** `antivirus_scan /`
+- **Parâmetros Opcionais:** `<caminho_base>` (padrão: `/`).
+- **Subsistema:** `security.integrity`.
+- **Saída de Sucesso:** Relatório de varredura de integridade (SHA-256 com verificação de assinatura HMAC do Kernel) e detecção de padrões maliciosos simulados.
 
 ---
 
 ### 2.10. `create_process`
-- **Sintaxe:** `create_process <nome> <tamanho_kb> [--reserved]`
-- **Parâmetros Obrigatórios:** `<nome>`, `<tamanho_kb>`.
-- **Parâmetros Opcionais:** `--reserved` (alocar na área reservada contígua de Kernel/Drivers).
-- **Pré-condições:** Memória suficiente disponível.
-- **Permissões Necessárias:** Se `--reserved`, exige privilégio de `root`/Modo Kernel.
-- **Subsistema Responsável:** `process` $\to$ `memory`.
-- **Resultado Esperado:** Criação de PCB com PID atribuído e alocação na área reservada (segmento contíguo) ou na área paginada (Page Table).
-- **Mensagens de Erro:**
-  - `Erro: Permissão negada. Apenas Modo Kernel pode alocar na área reservada.`
-  - `Erro: Memória insuficiente. Fragmentação externa impede alocação contígua (execute 'memory_compact').`
+- **Sintaxe Oficial:** `create_process --name "<nome>" --size <tamanho> --type <critical|normal>`
+- **Exemplos do Professor:**
+  - `create_process --name "Kernel_DiskDriver" --size 512KB --type critical`
+  - `create_process --name "App_Navegador" --size 10KB --type normal`
+- **Parâmetros Obrigatórios:**
+  - `--name "<nome>"`: Nome identificador do processo ou driver.
+  - `--size <tamanho>`: Tamanho de memória solicitado (ex.: `512KB`, `10KB`).
+  - `--type <critical|normal>`:
+    - `critical`: Processo de núcleo/driver alocado contiguamente na **Área Reservada**.
+    - `normal`: Processo de usuário alocado dinamicamente na **Área Paginada**.
+- **Parâmetros Opcionais (Aliases):** Sintaxe posicional `create_process <nome> <tamanho_kb> [--reserved]`.
+- **Pré-condições:** Se `--type critical`, exige privilégio de `root`/Kernel Mode.
+- **Subsistema:** `process` $\to$ `memory`.
+- **Saída de Sucesso:** PCB criado, PID retornado e confirmação da alocação de memória.
 
 ---
 
 ### 2.11. `terminate_process`
-- **Sintaxe:** `terminate_process <pid>`
-- **Parâmetros Obrigatórios:** `<pid>`.
-- **Pré-condições:** O processo com o PID fornecido deve estar ativo (`READY` ou `RUNNING`).
-- **Permissões Necessárias:** Proprietário do processo ou `root`.
-- **Subsistema Responsável:** `process` $\to$ `memory`.
-- **Resultado Esperado:** Liberação de todos os recursos de memória (segmentos, frames e slots de swap) e atualização do PCB para `TERMINATED`.
-- **Mensagens de Erro:**
-  - `Erro: Processo com PID <pid> inexistente.`
+- **Sintaxe Oficial:** `terminate_process --name "<nome>"`
+- **Exemplo do Professor:** `terminate_process --name "Kernel_NetDriver"`
+- **Parâmetros Obrigatórios:** `--name "<nome>"`.
+- **Parâmetros Alternativos (Alias):** `terminate_process --pid <PID>` ou posicional `terminate_process <PID>`.
+- **Pré-condições:** O processo deve estar ativo (`READY` ou `RUNNING`).
+- **Subsistema:** `process` $\to$ `memory`.
+- **Saída de Sucesso:** Liberação dos segmentos de memória contígua ou molduras/slots de swap e transição para `TERMINATED`.
 
 ---
 
 ### 2.12. `memory_status`
-- **Sintaxe:** `memory_status`
-- **Subsistema Responsável:** `memory`.
-- **Resultado Esperado:** Diagnóstico visual completo:
-  - Área Reservada: Segmentos alocados, buracos livres e cálculo de fragmentação externa.
-  - Área Dinâmica: Molduras totais, molduras livres, molduras ocupadas por processo.
-  - Swap: Capacidade total de slots e slots ocupados.
+- **Sintaxe Oficial:** `memory_status [--reserved]`
+- **Exemplo do Professor:** `memory_status --reserved`
+- **Parâmetros Opcionais:** `--reserved` (filtra o diagnóstico para a Área Reservada Contígua). Se omitido, exibe relatório completo de Área Reservada, Área Dinâmica Paginada e Swap.
+- **Subsistema:** `memory`.
+- **Saída de Sucesso:** Mapa visual dos segmentos, blocos livres, fragmentação externa e molduras.
 
 ---
 
 ### 2.13. `memory_compact`
-- **Sintaxe:** `memory_compact`
-- **Pré-condições:** Área reservada com segmentos desalocados intermediários (buracos).
-- **Permissões Necessárias:** Privilégio de `root` / Modo Kernel.
-- **Subsistema Responsável:** `memory`.
-- **Resultado Esperado:** Reorganização deslizante de segmentos alocados, unificação de todos os buracos livres em um único segmento livre contíguo e relatório de fragmentação zerada.
+- **Sintaxe Oficial:** `memory_compact [--reserved]`
+- **Exemplo do Professor:** `memory_compact --reserved`
+- **Parâmetros Opcionais:** `--reserved` (compacta a Área Reservada Contígua).
+- **Pré-condições:** Privilégio de `root` / Kernel Mode.
+- **Subsistema:** `memory`.
+- **Saída de Sucesso:** Reorganização deslizante de segmentos, unificação de buracos livres e fragmentação externa zerada.
 
 ---
 
 ### 2.14. `translate_address`
-- **Sintaxe:** `translate_address <pid> <endereco_logico>`
-- **Parâmetros Obrigatórios:** `<pid>`, `<endereco_logico>`.
-- **Subsistema Responsável:** `memory` (MMU).
-- **Resultado Esperado:** Decomposição em $(p, d)$, consulta à Page Table e tradução para o endereço físico $(f, d)$, ou notificação de Page Fault se a página não estiver presente na RAM física.
+- **Sintaxe Oficial:** `translate_address --process "<nome>" --page <numero_pagina>`
+- **Exemplo do Professor:** `translate_address --process App_Navegador --page 1`
+- **Parâmetros Obrigatórios:** `--process "<nome>"` (ou `--pid <PID>`), `--page <numero_pagina>`.
+- **Parâmetros Alternativos (Alias por Endereço Lógico):** `translate_address --pid <PID> --address <endereco_logico>` (ex.: `translate_address 103 4100`).
+- **Subsistema:** `memory.mmu`.
+- **Saída de Sucesso:** Moldura física mapeada ($f$) e cálculo de endereço físico, ou sinalização de Page Fault se ausente.
 
 ---
 
 ### 2.15. `execute_step`
-- **Sintaxe:** `execute_step <pid> <endereco_logico>`
-- **Parâmetros Obrigatórios:** `<pid>`, `<endereco_logico>`.
-- **Subsistema Responsável:** `process` $\to$ `memory` $\to$ `io`.
-- **Resultado Esperado:** Simulação de acesso a uma instrução de memória: tradução de endereço, tratamento de Page Fault sob demanda (se necessário), execução de política de substituição (LRU ou Segunda Chance) e carregamento via Swap.
+- **Sintaxe Oficial:** `execute_step --process "<nome>" --instruction "<instrucao>"`
+- **Exemplo do Professor:** `execute_step --process App_Navegador --instruction "LOAD_DATA Página 2"`
+- **Parâmetros Obrigatórios:** `--process "<nome>"` (ou `--pid <PID>`), `--instruction "<instrucao>"`.
+- **Subsistema:** `process` $\to$ `memory` (MMU, Page Fault Handler, LRU/Clock, Swap).
+- **Saída de Sucesso:** Execução do acesso, resolução de falta de página (se ausente) respeitando a origem válida, substituição de página se memória cheia e confirmação do acesso.
 
 ---
 
 ## 3. EXEMPLOS OFICIAIS DE FORMATAÇÃO DE SAÍDAS
 
-Abaixo constam os padrões visuais rigorosos a serem emitidos pela CLI para garantir conformidade acadêmica e aprovação nos testes determinísticos.
-
-### 3.1. Saída do Comando `fs_status`
+### 3.1. Diagnóstico do Sistema de Arquivos (`fs_status --details`)
 ```text
 ======================================================================
                   DIAGNÓSTICO DO SISTEMA DE ARQUIVOS
@@ -209,69 +189,30 @@ Abaixo constam os padrões visuais rigorosos a serem emitidos pela CLI para gara
 Estratégia de Alocação Ativa : INDEXADA (i-node)
 Tamanho do Bloco             : 4.096 bytes (4 KB)
 Total de Blocos no Disco     : 1.024 blocos (4.096 KB)
-Blocos Ocupados              : 32 blocos
-Blocos Livres                : 992 blocos
+Blocos de Dados Ocupados     : 32 blocos (131.072 bytes)
+Blocos de Índice Ocupados    : 6 blocos (24.576 bytes)
+Blocos Livres                : 986 blocos (4.038.656 bytes)
 Total de i-nodes             : 128 (Ocupados: 6 | Livres: 122)
 ----------------------------------------------------------------------
+Espaço Ocupado pelos Dados   : 124.928 bytes
+Sobrecarga de Metadados      : 24.576 bytes
 Fragmentação Interna Total   : 6.144 bytes
-Fragmentação Externa Total   : 0 bytes (não aplicável à alocação indexada)
+Fragmentação Externa (Geral) : 0 bytes (disco sem fragmentação restritiva)
 ======================================================================
 ```
 
-### 3.2. Saída do Comando `write_file` (Cenário FS-002)
+### 3.2. Gravação de Arquivo (`write_file`)
 ```text
 [write_file] Arquivo gravado com sucesso: /sistema/logs/app.log
 Tamanho Real do Conteúdo   : 10.240 bytes (10,00 KB)
-Blocos Físicos Alocados    : 3 blocos ([12, 13, 14])
-Capacidade Total Alocada   : 12.288 bytes (12,00 KB)
+Blocos de Dados Alocados   : 3 blocos ([12, 13, 14])
+Bloco de Índice Alocado    : Bloco 11
+Capacidade Total de Dados  : 12.288 bytes (12,00 KB)
 Fragmentação Interna       : 2.048 bytes
-Fragmentação Externa       : 0 bytes
+Fragmentação Externa       : 0 bytes (alocação indexada bem-sucedida)
 ```
 
-### 3.3. Saída do Escalonador de Disco (Cenário IO-001 — SSTF)
-```text
-======================================================================
-            RELATÓRIO DE ESCALONAMENTO DE DISCO (SSTF)
-======================================================================
-Posição Inicial do Cabeçote : Trilha 53
-Fila de Requisições         : [98, 183, 37, 122, 14]
-Ordem de Atendimento        : 53 -> 37 -> 14 -> 98 -> 122 -> 183
-----------------------------------------------------------------------
-Deslocamentos Detalhados:
-  | 53 - 37 | = 16 trilhas
-  | 37 - 14 | = 23 trilhas
-  | 14 - 98 | = 84 trilhas
-  | 98 - 122| = 24 trilhas
-  | 122- 183| = 61 trilhas
-----------------------------------------------------------------------
-Movimentação Total do Braço : 208 trilhas
-======================================================================
-```
-
-### 3.4. Saída de Falha e Reconstrução RAID 5 (Cenário IO-002)
-```text
-[RAID-5] Alerta: Falha física detectada no Disco 2!
-[RAID-5] Modo de Operação: DEGRADADO
-[RAID-5] Iniciando leitura com reconstrução em tempo real...
-  Lendo Bloco 0 (Disco 1)     : [0x41, 0x42, 0x43, 0x44]
-  Lendo Paridade (Disco 3)    : [0x05, 0x06, 0x07, 0x08]
-  Reconstruindo Bloco 1 (D2)  : Bloco 0 ^ Paridade = [0x44, 0x44, 0x44, 0x4C]
-[RAID-5] Bloco ausente recuperado com sucesso via XOR!
-```
-
-### 3.5. Saída de Negação de Acesso (Cenário SEC-002)
-```text
-[ERRO DE SEGURANÇA] Acesso Negado!
-Recurso Solicitado : /sistema/config.sys
-Usuário Ativo      : carlos (Grupos: devs)
-Proprietário/Grupo : root:admin
-Permissões do Nó   : -rwxr-x--- (750)
-Ação Solicitada    : LEITURA (r)
-Motivo             : Usuário 'carlos' não é proprietário, não pertence ao grupo 'admin' e as permissões para 'outros' são nulas (---).
-Auditoria          : Evento #1042 gravado com sucesso em /var/log/audit.log.
-```
-
-### 3.6. Saída do Diagnóstico de Memória e Compactação (Cenários MEM-001 e MEM-002)
+### 3.3. Diagnóstico e Compactação da Área Reservada (`memory_status --reserved` e `memory_compact --reserved`)
 ```text
 ======================================================================
               DIAGNÓSTICO DA ÁREA DE MEMÓRIA RESERVADA
@@ -289,7 +230,7 @@ Maior Bloco Livre Contíguo  : 1.024 KB
 Fragmentação Externa        : 1.024 KB (impede alocação contígua de 1.536 KB!)
 ======================================================================
 
-[Ação: memory_compact executado pelo usuário root]
+[Ação: memory_compact --reserved executado pelo usuário root]
 
 ======================================================================
         ÁREA DE MEMÓRIA RESERVADA APÓS COMPACTAÇÃO DESLIZANTE

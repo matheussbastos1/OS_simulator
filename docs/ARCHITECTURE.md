@@ -1,21 +1,27 @@
 # ESPECIFICAÇÃO ARQUITETURAL DO SISTEMA — OS SIMULATOR
 
-> **Status:** Especificação Oficial (Fase 0)  
-> **Objetivo:** Estabelecer a arquitetura holística, contratos de fronteira, fluxos de integração intersubsistemas e controle de estado do OS Simulator.
+> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
+> **Objetivo:** Estabelecer a arquitetura holística, o padrão de Portas e Adaptadores (Hexagonal Architecture) para desacoplamento temporal entre etapas, fluxos de integração intersubsistemas e controle de estado do OS Simulator.
 
 ---
 
-## 1. VISÃO ARQUITETURAL GERAL
+## 1. VISÃO ARQUITETURAL GERAL E PADRÃO DE PORTAS/ADAPTADORES
 
-O **OS Simulator** é projetado segundo uma arquitetura modular em camadas, orientada a objetos, com baixo acoplamento e alta coesão. Ele reproduz os comportamentos lógicos e mecanismos internos do sistema operacional Ubuntu Linux dentro de um ambiente isolado em memória no Python 3, executado sobre o Windows 11.
+O **OS Simulator** é projetado segundo uma arquitetura modular em camadas, orientada a objetos, com baixo acoplamento e alta coesão, estruturada sob o padrão de **Portas e Adaptadores (Ports and Adapters)**. Ele reproduz os comportamentos lógicos e mecanismos internos do sistema operacional Ubuntu Linux dentro de um ambiente isolado em memória no Python 3, executado sobre o Windows 11.
 
-A arquitetura organiza-se em cinco camadas lógicas:
+### 1.1. O Desacoplamento Temporal Entre Etapas
+Como o projeto é construído em quatro etapas acadêmicas consecutivas, o subsistema de Sistema de Arquivos (Etapa 1) não pode depender de implementações que ainda não foram criadas (E/S, RAID ou Segurança avançada). Para resolver isso com rigor de engenharia:
+1. **Contrato de Armazenamento (`BlockDevicePort`):** Interface que define operações conceituais de leitura de bloco, gravação de bloco, consulta de capacidade, blocos livres e liberação.
+   - *Na Etapa 1:* O `FileSystemService` consome o adaptador provisório em memória `InMemoryBlockDevice`.
+   - *Na Etapa 2:* O subsistema `IOManager` implementa a mesma interface via `IOBlockDeviceAdapter`, incorporando a fila de requisições, o escalonador mecânico (`DiskScheduler`) e o arranjo `RAIDArray` sem que o `FileSystemService` necessite sofrer modificações estruturais.
+2. **Contrato de Autorização (`AuthorizationPort`):** Interface que define verificação de permissões de leitura, escrita, execução e privilégios administrativos.
+   - *Nas Etapas 1 e 2:* O Kernel utiliza o adaptador provisório `BootstrapSecurityPolicy`, que opera sob um contexto inicial de execução (`ExecutionContext`, simulando usuário `root` e permissão ampla de desenvolvimento).
+   - *Na Etapa 3:* O subsistema `SecurityManager` substitui o adaptador provisório, fornecendo autenticação criptográfica (PBKDF2-HMAC-SHA256), ACLs POSIX completas e log de auditoria inviolável.
 
-1. **Camada de Apresentação (Interface do Usuário):** CLI e Shell Interativo simulado.
-2. **Camada de Orquestração do Sistema (Kernel da Simulação):** O objeto central `OperatingSystem` (ou `SimulationKernel`), responsável por manter o estado global, mediar chamadas de sistema (syscalls) e orquestrar a cooperação entre subsistemas.
-3. **Camada de Subsistemas de Alto Nível:** Segurança (`SecurityManager`), Sistema de Arquivos Virtual (`VFS` / `FileSystemService`) e Gerenciador de Processos (`ProcessManager`).
-4. **Camada de Subsistemas de Baixo Nível / Gerenciamento de Recursos:** Gerenciador de Memória (`MemoryManager` com MMU e Paginador) e Gerenciador de E/S (`IOManager` com Escalonadores e Controladores RAID).
-5. **Camada de Infraestrutura Física Simulada (Hardware Abstraction):** Memória Física Simulada (`PhysicalMemory` com área reservada e frames dinâmicos) e Discos Rígidos Físicos Simulados (`PhysicalDisk` com trilhas e blocos de dados).
+### 1.2. Propriedade dos Objetos `DiskBlock`
+Para evitar redundância de dados ou ambiguidades de projeto:
+- Os objetos `DiskBlock` e os buffers de dados brutos **pertencem exclusivamente à camada de armazenamento (`io` / storage abstraction)**.
+- O subsistema `filesystem` manipula e armazena em seus i-nodes exclusivamente **identificadores numéricos lógicos de blocos (`block_id: int`)**. O conteúdo de um bloco só é acessado invocando `BlockDevicePort.read_block(block_id)` e `BlockDevicePort.write_block(block_id, data)`.
 
 ```mermaid
 flowchart TD
@@ -23,355 +29,248 @@ flowchart TD
         CLI["CLI & Shell Interativo (/bin/sh simulado)"]
     end
 
-    subgraph Core ["Núcleo de Simulação"]
-        Kernel["OperatingSystem / SimulationKernel (Estado Global)"]
+    subgraph Core ["Núcleo de Orquestração (Kernel)"]
+        Kernel["SimulationKernel / ExecutionContext"]
+        AuthPort["AuthorizationPort (Interface)"]
+        BlockPort["BlockDevicePort (Interface)"]
+    end
+
+    subgraph AdaptersAuth ["Implementações de Autorização"]
+        BootstrapAuth["BootstrapSecurityPolicy (Etapas 1 e 2)"]
+        RealAuth["SecurityManager (Etapa 3: ACL, PBKDF2, Audit)"]
     end
 
     subgraph HighLevel ["Subsistemas de Alto Nível"]
-        SEC["Subsistema de Segurança (Auth, ACL, Audit)"]
-        VFS["Virtual File System & Filesystem (i-nodes, Árvore)"]
-        PROC["Gerenciador de Processos (PCB, Escalonamento de Tarefas)"]
+        VFS["Virtual File System & FilesystemService (i-nodes, Árvore)"]
+        PROC["ProcessManager (PCB, Escalonamento)"]
     end
 
-    subgraph LowLevel ["Subsistemas de Baixo Nível"]
-        MEM["Gerenciador de Memória (MMU, Paginação, Swap)"]
-        IO["Gerenciador de E/S (Scheduler, RAID)"]
+    subgraph AdaptersStorage ["Implementações de Armazenamento"]
+        MemAdapter["InMemoryBlockDevice (Etapa 1)"]
+        IOAdapter["IOManager + Scheduler + RAID (Etapa 2)"]
     end
 
-    subgraph Hardware ["Hardware Simulado em Memória"]
-        RAM["PhysicalMemory (Área Reservada + Molduras de Página)"]
-        DISKS["PhysicalDisks (Trilhas, Blocos, Controladores)"]
+    subgraph LowLevel ["Subsistema de Memória (Etapa 4)"]
+        MEM["MemoryManager (MMU, Paginação, LRU/Clock)"]
+        SWAP["SwapManager"]
     end
 
     CLI -->|Comandos e Syscalls| Kernel
-    Kernel --> SEC
+    Kernel --> AuthPort
+    AuthPort -.-> BootstrapAuth
+    AuthPort -.-> RealAuth
     Kernel --> VFS
     Kernel --> PROC
     Kernel --> MEM
-    Kernel --> IO
 
-    VFS -->|Requisições de Bloco| IO
-    PROC -->|Alocação de Espaço| MEM
-    MEM -->|Troca de Páginas / Swap| IO
-    IO -->|Acesso Físico a Setores| DISKS
-    MEM -->|Acesso Físico a Frames| RAM
-    SEC -.->|Políticas e Checagens| VFS
-    SEC -.->|Políticas de Execução| PROC
+    VFS --> BlockPort
+    SWAP --> BlockPort
+    BlockPort -.-> MemAdapter
+    BlockPort -.-> IOAdapter
 ```
 
 ---
 
-## 2. FRONTEIRAS E RESPONSABILIDADES DOS SUBSISTEMAS
+## 2. EVOLUÇÃO ARQUITETURAL ETAPA POR ETAPA
 
-### 2.1. CLI (Command Line Interface)
-- **Responsabilidade:** Interpretação léxica e sintática dos comandos do usuário, verificação básica de argumentos, despacho ao `SimulationKernel` e formatação visual dos resultados (tabelas, árvores, mensagens de erro).
-- **Fronteira:** Não implementa regras de negócio, não aloca blocos de disco nem molduras de memória diretamente. Apenas consome as interfaces expostas pelo Kernel.
+### 2.1. Arquitetura da Etapa 1: Sistema de Arquivos Isolado
+Na Etapa 1, a CLI interage com o VFS e o Filesystem. O armazenamento é gerenciado pelo adaptador `InMemoryBlockDevice`, e a segurança opera sob `BootstrapSecurityPolicy`.
 
-### 2.2. Virtual File System (VFS)
-- **Responsabilidade:** Abstração de caminhos absolutos e relativos, normalização de caminhos (`/sistema/../logs`), resolução hierárquica a partir da raiz `/` ou do diretório corrente de trabalho (CWD), e localização de nós.
-- **Fronteira:** O VFS não define o formato de alocação de blocos; ele localiza o `Node` e seu `Inode`, delegando as operações físicas de blocos ao `FileSystemService`.
-
-### 2.3. Filesystem Service
-- **Responsabilidade:** Criação, leitura, atualização e remoção de arquivos e diretórios; gerenciamento da tabela de i-nodes; cálculo de tamanho real vs. tamanho alocado; execução das estratégias de alocação (Contígua, FAT e Indexada) e métricas de fragmentação.
-- **Fronteira:** Comunica-se com o subsistema de E/S para leitura e escrita de blocos. Não movimenta o braço do disco diretamente.
-
-### 2.4. I/O Manager & Disk Scheduler
-- **Responsabilidade:** Recebimento e enfileiramento de requisições de E/S (`IORequest`), execução de algoritmos de escalonamento de braço (FCFS, SSTF, SCAN, C-SCAN), cálculo de tempo de busca e distância percorrida pelo cabeçote, e controle de SSD com Wear Leveling.
-- **Fronteira:** Não sabe o conteúdo semântico do arquivo; lida exclusivamente com identificadores de bloco lógico/físico, trilhas e operações de leitura/escrita.
-
-### 2.5. RAID Controller
-- **Responsabilidade:** Mapeamento de blocos lógicos do sistema de arquivos em blocos físicos de múltiplos `PhysicalDisk`. Implementa distribuição de blocos (*striping*), espelhamento (*mirroring*), cálculo de paridade XOR (RAID 4 e RAID 5) e reconstrução em caso de falha de unidade física.
-- **Fronteira:** Atua como intermediário transparente entre o escalonador de E/S e os discos físicos.
-
-### 2.6. Security Manager
-- **Responsabilidade:** Autenticação de credenciais de usuários via derivação de chave segura (PBKDF2-HMAC-SHA256), gerenciamento de identidades e grupos, avaliação de matriz de controle de acesso (ACL rwx e octal), aplicação de restrições de Modo Usuário vs. Modo Kernel, registro de eventos de auditoria invioláveis, criptografia de payloads e verificação de integridade/antivírus.
-- **Fronteira:** Intercepta chamadas de sistema antes da execução de operações de I/O, VFS ou processos.
-
-### 2.7. Process Manager
-- **Responsabilidade:** Criação e manutenção do ciclo de vida de processos (PCBs), transição de estados (READY, RUNNING, BLOCKED, TERMINATED), atribuição de PID e requisição de alocação de espaço ao `MemoryManager`.
-- **Fronteira:** Não gerencia a tradução de endereços físicos; delega toda a infraestrutura de endereçamento e molduras à MMU e ao `MemoryManager`.
-
-### 2.8. Memory Manager & MMU
-- **Responsabilidade:** Administração da Memória Física Simulada.
-  - *Área Reservada Contígua:* Alocação de processos críticos do sistema, controle de segmentos contíguos, cálculo de fragmentação externa e algoritmo de compactação `memory_compact`.
-  - *Área Dinâmica Paginada:* Criação de `PageTable`, gerenciamento de `Frame`, tradução de endereços virtuais via MMU, tratamento de `PageFaultException`, execução de substituição de páginas (LRU e Segunda Chance/Clock) e comunicação com o `SwapManager`.
-- **Fronteira:** Utiliza o subsistema de E/S para realizar operações de troca com a partição de Swap.
+```mermaid
+flowchart LR
+    CLI["CLI (mkdir, create, write_file, read_file, fs_status)"] --> VFS["Virtual File System"]
+    VFS --> FS["FileSystemService (i-nodes, FAT, Indexação)"]
+    FS -->|BlockDevicePort| Dev["InMemoryBlockDevice (Array de Blocos em Memória)"]
+    FS -.->|AuthorizationPort| Auth["BootstrapSecurityPolicy (Permite acesso / Contexto Inicial)"]
+```
 
 ---
 
-## 3. DIAGRAMAS DE FLUXO DE INTEGRAÇÃO
-
-### 3.1. Fluxo de Gravação de Arquivo (`write_file`)
-
-O fluxo demonstra a integração completa ponta a ponta desde a digitação do comando até a gravação nos discos físicos:
+### 2.2. Arquitetura da Etapa 2: Entrada/Saída, Escalonamento e RAID
+Na Etapa 2, o adaptador de armazenamento provisório é substituído pelo subsistema completo de E/S. O `FileSystemService` continua chamando as mesmas operações da `BlockDevicePort`, mas agora cada operação transita pela fila de requisições, escalonador de cabeçote e controlador RAID.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Usuário (CLI)
-    participant CLI as CLI Layer
-    participant Kernel as SimulationKernel
-    participant SEC as SecurityManager
-    participant VFS as VirtualFileSystem
-    participant FS as FileSystemService
-    participant IO as IOManager / Scheduler
-    participant RAID as RAIDController
-    participant Disk as PhysicalDisks
+flowchart TD
+    FS["FileSystemService"] -->|BlockDevicePort| IO["IOBlockDeviceAdapter / IOManager"]
+    IO --> REQ["IORequest Generator (Leitura/Escrita)"]
+    REQ --> SCHED["DiskScheduler (FCFS, SSTF, SCAN, C-SCAN)"]
+    SCHED --> RAID["RAIDController (RAID 0, 1, 4, 5 + XOR Parity)"]
+    RAID --> DISK1["PhysicalDisk 1 (Trilhas/Setores)"]
+    RAID --> DISK2["PhysicalDisk 2 (Trilhas/Setores)"]
+    RAID --> DISK3["PhysicalDisk 3 (Trilhas/Setores)"]
+    SCHED -.-> SSD["SSDController (Wear Leveling)"]
+```
 
-    User->>CLI: write_file /sistema/logs/app.log "Dados de log"
-    CLI->>Kernel: dispatch(write_file, args, active_user)
-    Kernel->>SEC: check_permission(active_user, path, ACCESS_WRITE)
-    alt Permissão Negada
-        SEC->>Kernel: PermissionDeniedException
-        Kernel->>SEC: log_audit(EVENT_ACCESS_DENIED)
-        Kernel->>CLI: Exibe erro de acesso negado
-    else Permissão Concedida
-        SEC->>Kernel: AccessGranted
-        Kernel->>VFS: resolve_path("/sistema/logs/app.log")
-        VFS->>FS: get_or_create_inode(path)
-        FS->>FS: allocate_blocks(content_size, strategy)
-        opt Arquivo Criptografado
-            FS->>SEC: encrypt_payload(data, key)
-            SEC-->>FS: encrypted_data
-        end
-        loop Para cada bloco a ser gravado
-            FS->>IO: submit_request(IORequest(WRITE, block_id, track, data))
-            IO->>IO: enqueue_and_schedule(request)
-            IO->>RAID: dispatch_to_array(block_id, data)
-            RAID->>RAID: calculate_parity_xor(stripe)
-            RAID->>Disk: write_physical_block(disk_id, track, block_data)
-            Disk-->>RAID: write_ack
-            RAID-->>IO: io_complete
-        end
-        FS->>FS: update_inode_metadata(size, blocks, mtime)
-        Kernel->>SEC: log_audit(EVENT_FILE_WRITTEN)
-        Kernel-->>CLI: Sucesso (blocos alocados, fragmentação calculada)
-        CLI-->>User: Relatório de confirmação
+---
+
+### 2.3. Arquitetura da Etapa 3: Segurança, Controle de Acesso e Criptografia
+Na Etapa 3, o `BootstrapSecurityPolicy` é substituído pelo `SecurityManager`. As chamadas ao VFS e ao Kernel agora passam por validação rigorosa de identidade e ACL, registrando auditoria. O Filesystem utiliza serviços criptográficos para dados em repouso.
+
+```mermaid
+flowchart TD
+    CLI["CLI (login, chmod, encrypt_file, antivirus_scan)"] --> Kernel["SimulationKernel"]
+    Kernel -->|AuthorizationPort| SM["SecurityManager"]
+    SM --> AUTH["AuthenticationService (PBKDF2 600k iterações)"]
+    SM --> ACL["ACL Engine (rwx / Octal 750, etc.)"]
+    SM --> AUDIT["AuditLog (Trilha Inviolável)"]
+    SM --> CRYPTO["CryptoEngine (AES-256-GCM em Repouso)"]
+    SM --> INTEGRITY["IntegrityVerifier & Antivírus"]
+    Kernel --> VFS["VirtualFileSystem (Protegido por ACL)"]
+```
+
+---
+
+### 2.4. Arquitetura da Etapa 4: Gerenciamento de Memória Real e Virtual com Swap
+Na Etapa 4, o subsistema de processos e memória é plenamente integrado. A Área Reservada é gerenciada contiguamente (com `memory_compact`), enquanto a Área Dinâmica é paginada via MMU. O `SwapManager` utiliza diretamente a porta `BlockDevicePort` para persistir páginas em blocos simulados de armazenamento.
+
+```mermaid
+flowchart TD
+    PROC["ProcessManager (PCBs)"] --> MEM["MemoryManager"]
+    
+    subgraph MemReal ["Área Reservada Contígua (Kernel & Drivers)"]
+        SEG["MemorySegment List (First-Fit / Best-Fit)"]
+        COMPACT["memory_compact (Desfragmentação Deslizante)"]
     end
-```
-
----
-
-### 3.2. Fluxo de Leitura de Arquivo (`read_file`)
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Usuário (CLI)
-    participant CLI as CLI Layer
-    participant Kernel as SimulationKernel
-    participant SEC as SecurityManager
-    participant VFS as VirtualFileSystem
-    participant FS as FileSystemService
-    participant IO as IOManager
-    participant RAID as RAIDController
-    participant Disk as PhysicalDisks
-
-    User->>CLI: read_file /sistema/config.sys
-    CLI->>Kernel: dispatch(read_file, path, active_user)
-    Kernel->>SEC: check_permission(active_user, path, ACCESS_READ)
-    alt Permissão Negada (ex: Carlos sem privilégio em 750)
-        SEC->>SEC: log_audit(EVENT_READ_DENIED, path, active_user)
-        SEC-->>Kernel: PermissionDeniedException
-        Kernel-->>CLI: Erro: Permissão negada para leitura
-        CLI-->>User: Exibe mensagem de erro e aborta
-    else Permissão Concedida
-        SEC-->>Kernel: OK
-        Kernel->>VFS: resolve_path(path)
-        VFS->>FS: read_inode_data(inode)
-        loop Para cada bloco do i-node
-            FS->>IO: read_request(IORequest(READ, block_id))
-            IO->>RAID: read_block(block_id)
-            alt Disco Físico Operacional
-                RAID->>Disk: read_physical_block(disk_id, block_id)
-                Disk-->>RAID: raw_block_data
-            else Disco Físico com Falha (ex: Disco 2 offline em RAID 5)
-                RAID->>Disk: read_surviving_blocks(other_disks)
-                Disk-->>RAID: surviving_blocks_and_parity
-                RAID->>RAID: reconstruct_block_via_xor()
-            end
-            RAID-->>IO: block_data
-            IO-->>FS: block_data
-        end
-        opt Arquivo Criptografado
-            FS->>SEC: decrypt_payload(raw_data)
-            SEC-->>FS: decrypted_data
-        end
-        FS->>SEC: verify_integrity_hash(data, stored_hash)
-        Kernel-->>CLI: Retorna conteúdo e diagnóstico de leitura
-        CLI-->>User: Exibe o conteúdo do arquivo
-    end
-```
-
----
-
-### 3.3. Fluxo de Autenticação e Autorização
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Usuário
-    participant CLI as CLI Layer
-    participant Kernel as SimulationKernel
-    participant SEC as SecurityManager
-    participant Audit as AuditLog
-
-    User->>CLI: login carlos
-    CLI->>CLI: Solicita senha (input seguro)
-    CLI->>Kernel: authenticate("carlos", "senha123")
-    Kernel->>SEC: verify_credentials("carlos", "senha123")
-    SEC->>SEC: retrieve_user_record("carlos")
-    SEC->>SEC: derive_hash = PBKDF2(input_password, stored_salt)
-    SEC->>SEC: hmac.compare_digest(derive_hash, stored_password_hash)
-    alt Hash Correto
-        SEC->>SEC: set_active_session("carlos", user_groups, user_mode)
-        SEC->>Audit: log(EVENT_LOGIN_SUCCESS, "carlos")
-        SEC-->>Kernel: AuthenticationSuccess(User)
-        Kernel-->>CLI: Sucesso: Sessão iniciada como carlos
-    else Senha Inválida ou Usuário Inexistente
-        SEC->>Audit: log(EVENT_LOGIN_FAILURE, "carlos")
-        SEC-->>Kernel: AuthenticationFailedException
-        Kernel-->>CLI: Erro: Falha de autenticação
-    end
-```
-
----
-
-### 3.4. Fluxo de Criação e Encerramento de Processos
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Operador / CLI
-    participant Kernel as SimulationKernel
-    participant PROC as ProcessManager
-    participant MEM as MemoryManager
-    participant RAM as PhysicalMemory
-
-    User->>Kernel: create_process("Kernel_NetDriver", size=1024KB, is_reserved=True)
-    Kernel->>PROC: allocate_pcb("Kernel_NetDriver", is_reserved=True)
-    PROC->>MEM: allocate_process_memory(pid, size, is_reserved=True)
-    alt Segmento Reservado (Memória Contígua)
-        MEM->>RAM: find_contiguous_free_segment(size)
-        alt Espaço Contíguo Disponível
-            RAM-->>MEM: MemorySegment(start, end, size)
-            MEM-->>PROC: MemoryAllocated
-            PROC-->>Kernel: ProcessReady(pid=102)
-        else Fragmentação Externa Impede Alocação Contígua
-            RAM-->>MEM: OutOfContiguousMemoryException(fragmented=True)
-            MEM-->>Kernel: Requer Compactação (memory_compact)
-        end
-    else Processo de Usuário Dinâmico (Memória Paginada)
-        MEM->>MEM: calculate_pages_needed(size, page_size=4KB)
-        MEM->>RAM: allocate_free_frames(page_count)
-        MEM->>MEM: build_page_table(pid, allocated_frames)
-        MEM-->>PROC: ProcessReady(pid=103)
+    
+    subgraph MemVirtual ["Área Dinâmica Paginada"]
+        MMU["MMU (Tradução Lógica-Física)"]
+        PT["PageTable & PageTableEntries"]
+        FRAMES["PhysicalMemory Frames"]
+        PAGEFAULT["Page Fault Handler"]
+        REPL["Page Replacement (LRU / Segunda Chance Clock)"]
     end
 
-    Note over User, RAM: Encerramento de Processo
-    User->>Kernel: terminate_process(pid=102)
-    Kernel->>PROC: mark_terminated(pid=102)
-    PROC->>MEM: free_process_memory(pid=102)
-    MEM->>RAM: release_segments_or_frames(pid=102)
-    RAM-->>MEM: memory_freed
-    MEM-->>Kernel: ProcessTerminatedSuccess
+    subgraph StorageSwap ["Armazenamento de Troca"]
+        SWAP["SwapManager"]
+        PORT["BlockDevicePort (Acesso ao Disco/RAID)"]
+    end
+
+    MEM --> MemReal
+    MEM --> MemVirtual
+    MMU -->|Falta de Página| PAGEFAULT
+    PAGEFAULT --> REPL
+    PAGEFAULT --> SWAP
+    SWAP --> PORT
 ```
 
 ---
 
-### 3.5. Fluxo de Tradução de Endereços, Page Fault e Swap
+## 3. FRONTEIRAS E CONTRATOS DOS SUBSISTEMAS
+
+### 3.1. CLI (Command Line Interface)
+- **Responsabilidade:** Interpretação sintática compatível com a especificação oficial do professor (`--name`, `--size`, `--type`, `--details`, `--user`, `--key`), validação preliminar e exibição visual formatada.
+- **Fronteira:** Despacha comandos ao Kernel. Não acessa blocos nem molduras diretamente.
+
+### 3.2. Virtual File System (VFS) e Filesystem Service
+- **Responsabilidade:** Resolução canônica de caminhos, hierarquia de nós (`Node`), metadados (`Inode`) e estratégias de alocação (Contígua, FAT e Indexada).
+- **Fronteira:** Não instancia nem manipula discos rígidos diretamente; toda persistência é feita via `BlockDevicePort`.
+
+### 3.3. I/O Manager, Disk Scheduler e Controladores RAID
+- **Responsabilidade:** Escalonamento de cabeçote mecânico, cálculo de deslocamento de trilhas, matriz de desgaste para SSD (*Wear Leveling*), striping, espelhamento, cálculo de paridade XOR e reconstrução transparente de blocos em RAID 5.
+- **Fronteira:** Expõe a interface `BlockDevicePort` para o sistema de arquivos e para o SwapManager.
+
+### 3.4. Security Manager
+- **Responsabilidade:** Autenticação robusta (PBKDF2-HMAC-SHA256 com 600.000 iterações), verificação de ACLs POSIX, diferenciação entre Modo Usuário e Modo Kernel, auditoria em `AuditLog`, criptografia AES-256-GCM de payloads e verificação de integridade/antivírus simulado.
+- **Fronteira:** Atua como filtro de autorização via `AuthorizationPort`.
+
+### 3.5. Process Manager e Memory Manager
+- **Responsabilidade:** Controle de ciclo de vida de processos (PCBs), gerenciamento contíguo da Área Reservada (`memory_compact`), tabelas de páginas, molduras físicas, tradução por MMU, tratamento de Page Fault considerando origens válidas e políticas de substituição LRU e Segunda Chance.
+- **Fronteira:** Utiliza `BlockDevicePort` para operações de swap-out e swap-in.
+
+---
+
+## 4. FLUXO DETALHADO DE PAGINAÇÃO, PAGE FAULT E SWAP
+
+O tratamento de falta de página distingue formalmente a **origem válida** da página solicitada e o estado da página vítima:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor CPU as CPU / Instrução Simulada
+    actor CPU as Instrução / CPU Simulada
     participant MMU as MMU
     participant PT as PageTable
     participant MEM as MemoryManager
-    participant Repl as PageReplacementPolicy (LRU)
-    participant Swap as SwapManager
-    participant IO as IOManager
-    participant RAM as PhysicalMemory
+    participant RAM as PhysicalMemory (Frames)
+    participant REPL as ReplacementPolicy (LRU/Clock)
+    participant SWAP as SwapManager
+    participant DEV as BlockDevicePort
 
-    CPU->>MMU: translate(virtual_address=4100)
-    MMU->>MMU: Decompor: page_num = 4100 // 4096 = 1, offset = 4100 % 4096 = 4
-    MMU->>PT: get_entry(page_num=1)
-    PT-->>MMU: PageTableEntry(page=1, frame=None, present=False)
+    CPU->>MMU: translate(virtual_address)
+    MMU->>PT: lookup(page_id)
+    PT-->>MMU: PageTableEntry(present=False, page_origin, swap_slot)
 
-    alt Page Fault Detectado!
-        MMU->>MEM: trigger_page_fault(pid, page_num=1)
-        MEM->>RAM: get_free_frame()
-        alt Sem Frames Livres na RAM Física
-            RAM-->>MEM: None (RAM Cheia)
-            MEM->>Repl: select_victim_frame()
-            Repl-->>MEM: victim_entry (ex: page=0 do frame 4, dirty=True)
-            opt Vítima Modificada (bit dirty == True)
-                MEM->>Swap: swap_out(victim_entry)
-                Swap->>IO: write_swap_block(victim_data)
-                IO-->>Swap: written
+    alt Bit present == False (Page Fault!)
+        MMU->>MEM: handle_page_fault(pid, page_id)
+        MEM->>RAM: find_free_frame()
+        alt Não há moldura livre (RAM cheia)
+            RAM-->>MEM: None
+            MEM->>REPL: select_victim_frame()
+            REPL-->>MEM: victim_entry (frame_v, dirty, page_origin)
+            alt Vítima Modificada (dirty == True)
+                MEM->>SWAP: swap_out(victim_entry.page_id, frame_v.data)
+                SWAP->>DEV: write_block(swap_block_id, data)
+                DEV-->>SWAP: ack
+                SWAP-->>MEM: swap_slot_allocated
+                MEM->>PT: update_victim(present=False, frame_id=None, swap_slot=slot)
+            else Vítima Limpa (dirty == False)
+                MEM->>PT: update_victim(present=False, frame_id=None)
+                Note over MEM, PT: Página limpa é descartada sem gravação no Swap!
             end
-            MEM->>PT: update_victim_entry(present=False, frame=None)
-            MEM->>RAM: assign_frame_to_new_page(frame=4)
-        else Moldura Livre Encontrada
-            RAM-->>MEM: frame_id=4
+            MEM->>RAM: allocate_frame(frame_v)
+        else Moldura livre encontrada
+            RAM-->>MEM: free_frame_id
         end
-        MEM->>Swap: swap_in(pid, page_num=1)
-        Swap->>IO: read_swap_block(page_num)
-        IO-->>Swap: page_data
-        Swap-->>MEM: page_data
-        MEM->>RAM: load_data_into_frame(frame_id=4, page_data)
-        MEM->>PT: update_entry(page=1, frame_id=4, present=True, dirty=False, referenced=True)
+
+        alt Origem: ZERO_FILL_ON_DEMAND
+            MEM->>RAM: fill_frame_with_zeros(frame_id)
+            Note over MEM, RAM: Inicialização direta com zeros (sem I/O de disco/swap!)
+        else Origem: PROCESS_IMAGE
+            MEM->>DEV: load_executable_segment(pid, page_id)
+            DEV-->>MEM: segment_data
+            MEM->>RAM: write_frame_data(frame_id, segment_data)
+        else Origem: SWAP_STORAGE
+            MEM->>SWAP: swap_in(swap_slot)
+            SWAP->>DEV: read_block(swap_block_id)
+            DEV-->>SWAP: raw_page_data
+            SWAP-->>MEM: raw_page_data
+            MEM->>RAM: write_frame_data(frame_id, raw_page_data)
+            MEM->>SWAP: free_swap_slot(swap_slot)
+        end
+
+        MEM->>PT: update_entry(page_id, frame_id, present=True, dirty=False, referenced=True)
         MEM-->>MMU: PageFaultResolved
     end
 
-    MMU->>PT: get_entry(page_num=1)
-    PT-->>MMU: PageTableEntry(page=1, frame=4, present=True)
-    MMU->>MMU: physical_address = (4 * 4096) + 4 = 16388
-    MMU-->>CPU: physical_address = 16388
+    MMU->>MMU: physical_address = (frame_id * page_size) + offset
+    MMU-->>CPU: physical_address
 ```
-
----
-
-## 4. GERENCIAMENTO DE DEPENDÊNCIAS ENTRE MÓDULOS
-
-Para manter acoplamento fraco e prevenir dependências circulares:
-1. **Regra de Direcionalidade:** Pacotes de alto nível podem importar tipos e interfaces de pacotes de nível inferior; o inverso é terminantemente proibido.
-   - `cli` $\to$ `core`, `types`
-   - `core` $\to$ `filesystem`, `io`, `security`, `memory`, `process`
-   - `filesystem` $\to$ `io` (via `IOManagerInterface`), `security` (via `SecurityCheckerInterface`)
-   - `memory` $\to$ `io` (para Swap via `SwapIOInterface`), `process` (apenas para referências de PID)
-2. **Injeção de Dependências:** O subsistema `core.kernel.SimulationKernel` atua como agregador e injetor. Serviços como `IOManager` e `SecurityManager` são passados como dependências para o `FileSystemService` e `MemoryManager` durante a inicialização do Kernel.
 
 ---
 
 ## 5. ESTADO GLOBAL DA SIMULAÇÃO: O `SimulationKernel`
 
-O `SimulationKernel` (ou `OperatingSystem`) é a classe singleton/container que mantém a integridade do estado global. Ele possui a seguinte responsabilidade:
+O contêiner central da simulação agrega as portas e subsistemas de forma unificada:
 
 ```python
 class SimulationKernel:
-    """Contêiner central de orquestração do OS Simulator."""
+    """Núcleo orquestrador e contêiner do estado global da simulação."""
 
     def __init__(self, config: SystemConfiguration):
-        self.security_manager: SecurityManager
+        self.context: ExecutionContext                  # Usuário corrente, CWD, modo de privilégio
+        self.auth_port: AuthorizationPort               # BootstrapSecurityPolicy -> SecurityManager
+        self.block_device: BlockDevicePort              # InMemoryBlockDevice -> IOManagerAdapter
         self.vfs: VirtualFileSystem
         self.filesystem_service: FileSystemService
-        self.io_manager: IOManager
-        self.raid_controller: RAIDController
-        self.memory_manager: MemoryManager
-        self.process_manager: ProcessManager
-        self.audit_log: AuditLog
-        self.current_user: User
-        self.current_working_directory: str
+        self.memory_manager: Optional[MemoryManager]
+        self.process_manager: Optional[ProcessManager]
+        self.audit_log: Optional[AuditLog]
         self.is_running: bool
 
     def boot(self) -> None:
-        """Inicializa todos os subsistemas em sequência segura."""
+        """Inicializa os subsistemas na ordem arquitetural correta."""
         ...
 
     def execute_syscall(self, syscall_name: str, **kwargs) -> Any:
-        """Ponto de entrada único para chamadas privilegiadas da CLI."""
+        """Ponto de entrada único e auditado para operações privilegiadas."""
         ...
 ```
-
-Esta arquitetura garante que nenhum subsistema manipule o estado de outro de forma arbitrária, mantendo toda a rastreabilidade sob o Kernel e o log de auditoria.
