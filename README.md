@@ -103,7 +103,7 @@ cd "OS_simulator"
 git checkout dev
 ```
 
-### 6.2. Execução do Shell Interativo (Após implementação das etapas)
+### 6.2. Execução do Shell Interativo (Etapa 1 operacional)
 ```powershell
 # Iniciar o simulador interativo via Python
 python -m os_simulator.cli

@@ -85,18 +85,18 @@ Cada etapa segue rigorosamente:
 **Branch:** `feature/etapa-1-filesystem`  
 **Objetivo:** Construir a camada de representação em árvore de arquivos e diretórios, VFS, abstração de i-nodes e blocos de dados, suportando três estratégias de alocação de armazenamento e diagnóstico de fragmentação, operando sobre `BlockDevicePort` e `AuthorizationPort`.
 
-- [ ] Definir a hierarquia de nós (`Node`, `DirectoryNode`, `FileNode`) e resolução de caminhos VFS (absolutos e relativos).
-- [ ] Implementar a abstração de i-nodes (`Inode`) com metadados POSIX simulados (tamanho, permissões, proprietário, timestamps, blocos).
-- [ ] Implementar a porta `BlockDevicePort` e o adaptador provisório em memória `InMemoryBlockDevice`.
-- [ ] Implementar a porta `AuthorizationPort` e a política provisória `BootstrapSecurityPolicy`.
-- [ ] Implementar a Estratégia de Alocação Contígua com First-Fit / Best-Fit e detecção de fragmentação externa.
-- [ ] Implementar a Estratégia de Alocação Encadeada (FAT — File Allocation Table) com encadeamento de ponteiros.
-- [ ] Implementar a Estratégia de Alocação Indexada com bloco de índices direto e indireto.
-- [ ] Implementar cálculo matemático preciso de fragmentação interna (último bloco) e fragmentação externa.
-- [ ] Implementar os comandos da CLI: `mkdir`, `create --size`, `ls`, `cd`, `write_file`, `read_file`, `fs_status --details`.
-- [ ] Implementar suite de testes unitários para o sistema de arquivos.
-- [ ] Validar e homologar os cenários determinísticos `FS-001`, `FS-002` e `FS-003` do `tests/GROUND_TRUTH.md`.
-- [ ] Consolidar commits e integrar à `dev`.
+- [x] Definir a hierarquia de nós (`Node`, `DirectoryNode`, `FileNode`) e resolução de caminhos VFS (absolutos e relativos).
+- [x] Implementar a abstração de i-nodes (`Inode`) com metadados POSIX simulados (tamanho, permissões, proprietário, timestamps, blocos).
+- [x] Implementar a porta `BlockDevicePort` e o adaptador provisório em memória `InMemoryBlockDevice`.
+- [x] Implementar a porta `AuthorizationPort` e a política provisória `BootstrapSecurityPolicy`.
+- [x] Implementar a Estratégia de Alocação Contígua com First-Fit / Best-Fit e detecção de fragmentação externa.
+- [x] Implementar a Estratégia de Alocação Encadeada (FAT — File Allocation Table) com encadeamento de ponteiros.
+- [x] Implementar a Estratégia de Alocação Indexada com bloco de índices direto e indireto.
+- [x] Implementar cálculo matemático preciso de fragmentação interna (último bloco) e fragmentação externa.
+- [x] Implementar os comandos da CLI: `mkdir`, `create --size`, `ls`, `cd`, `write_file`, `read_file`, `fs_status --details`.
+- [x] Implementar suite de testes unitários para o sistema de arquivos.
+- [x] Validar e homologar os cenários determinísticos `FS-001`, `FS-002` e `FS-003` do `tests/GROUND_TRUTH.md`.
+- [x] Consolidar commits e integrar à `dev`.
 
 ---
 
@@ -170,8 +170,8 @@ Cada etapa segue rigorosamente:
 | Versão | Fase | Descrição | Status |
 |---|---|---|---|
 | `v0.1.0` | Fase 0 | Fundação Arquitetural, Governança Git e Especificações | Concluído |
-| `v0.1.1` | Fase 0.1 | Revisão de Consistência, Portas/Adaptadores e Alinhamento CLI | Em andamento |
-| `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação via Adaptador em Memória | Não iniciado |
+| `v0.1.1` | Fase 0.1 | Revisão de Consistência, Portas/Adaptadores e Alinhamento CLI | Concluído |
+| `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação via Adaptador em Memória | Concluído |
 | `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Não iniciado |
 | `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Não iniciado |
 | `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Não iniciado |
