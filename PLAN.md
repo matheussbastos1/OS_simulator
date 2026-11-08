@@ -51,9 +51,9 @@ Cada etapa segue rigorosamente:
 - [x] Criar o manual principal do projeto e instruções de uso (`README.md`).
 - [x] Executar auditoria cruzada de consistência entre todos os documentos.
 - [x] Registrar commits no padrão Conventional Commits na branch `feature/fase-0-documentacao`.
-- [ ] Realizar push da branch `feature/fase-0-documentacao` para `origin`.
-- [ ] Integrar a branch `feature/fase-0-documentacao` à branch `dev`.
-- [ ] Realizar push da branch `dev` para `origin`.
+- [x] Realizar push da branch `feature/fase-0-documentacao` para `origin`.
+- [x] Integrar a branch `feature/fase-0-documentacao` à branch `dev`.
+- [x] Realizar push da branch `dev` para `origin`.
 
 ---
 
