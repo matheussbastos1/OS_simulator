@@ -68,6 +68,19 @@ Para evitar divergências na interpretação acadêmica e técnica:
 
 ---
 
+### 1.5. Algoritmo Transacional de Gravação e Redimensionamento (`write_data`)
+Para garantir integridade contra falhas de espaço em disco e evitar perda de dados:
+1. **Planejamento Prévio:** Calcula o número de blocos necessários ($N_{\text{novo}}$) em relação aos blocos atuais ($N_{\text{atual}}$).
+2. **Reutilização e Expansão Delta ($\Delta = N_{\text{novo}} - N_{\text{atual}}$):**
+   - Se $N_{\text{novo}} == N_{\text{atual}}$: Sobrescreve os blocos existentes em vigor sem alocação ou liberação.
+   - Se $N_{\text{novo}} < N_{\text{atual}}$ (Encolhimento): Mantém os primeiros $N_{\text{novo}}$ blocos e devolve apenas os blocos excedentes ao dispositivo.
+   - Se $N_{\text{novo}} > N_{\text{atual}}$ (Crescimento):
+     - **FAT e Indexada:** Valida se `device.get_free_count() >= \Delta`. Se insuficiente, lança `DiskFullException` imediatamente sem alterar os blocos existentes. Aloca apenas $\Delta$ blocos novos e conecta à estrutura existente.
+     - **Contígua:** Avalia se os blocos subsequentes estão livres para expansão in-place; se não, busca novo intervalo contíguo de tamanho $N_{\text{novo}}$ no espaço livre restante. Caso precise desalocar o espaço antigo para consolidar um segmento, realiza backup em memória do payload original e efetua rollback estrito se a alocação for frustrada por fragmentação ou espaço.
+3. **Rollback em Caso de Falha:** Qualquer exceção durante escrita restaura o estado anterior de ponteiros, i-node e blocos no dispositivo físico, assegurando que o arquivo nunca permaneça truncado ou corrompido.
+
+---
+
 ## 2. SUBSISTEMA DE ENTRADA E SAÍDA (I/O) E ARMAZENAMENTO (ETAPA 2)
 
 ### 2.1. Escalonamento Mecânico de Disco (HDD)
