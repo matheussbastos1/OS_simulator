@@ -57,12 +57,15 @@ class TestPhysicalDiskAndRAID(unittest.TestCase):
         self.assertEqual(raid.disks[0].read_block(0)[:len(d0_payload)], d0_payload)
         self.assertEqual(raid.disks[1].read_block(0)[:len(d1_payload)], d1_payload)
 
-        # Fail Disk 1
+        # Fail Disk 1 -> Entire array fails, blocking further I/O
         raid.fail_disk(1)
         self.assertEqual(raid.status, RAIDStatus.FAILED)
-        self.assertEqual(raid.read_block(0)[:len(d0_payload)], d0_payload)  # Disk 0 still reads
-        with self.assertRaises(DiskFailureException):
-            raid.read_block(1)  # Disk 1 fails
+        with self.assertRaises(RAIDFailedException):
+            raid.read_block(0)  # Blocked
+        with self.assertRaises(RAIDFailedException):
+            raid.read_block(1)  # Blocked
+        with self.assertRaises(RAIDFailedException):
+            raid.write_block(0, b"New")  # Blocked
 
     def test_raid1_mirroring_and_redundancy(self):
         """RAID 1 duplicates data; tolerates failure of mirror disk."""
@@ -176,6 +179,82 @@ class TestPhysicalDiskAndRAID(unittest.TestCase):
         # Rebuild Disk 0
         raid.rebuild_disk(0)
         self.assertEqual(raid.status, RAIDStatus.OPTIMAL)
+
+    def test_degraded_write_preserves_offline_data_raid4_and_raid5(self):
+        """Verify that writing to an online disk in degraded mode does NOT corrupt
+        the data of the offline disk in RAID 5 and RAID 4 (Hotfix item 1).
+        """
+        # --- RAID 5 ---
+        r5 = RAIDFactory.create(RAIDLevel.RAID_5, num_disks=3, disk_capacity=8, block_size=1024)
+        d0 = b"AAAA" * 20
+        d1 = b"BBBB" * 20
+        d1_updated = b"CCCC" * 20
+
+        r5.write_block(0, d0)
+        r5.write_block(1, d1)
+
+        # Fail Disk 0
+        r5.fail_disk(0)
+        self.assertEqual(r5.status, RAIDStatus.DEGRADED)
+
+        # Write to online Disk 1
+        r5.write_block(1, d1_updated)
+        self.assertTrue(r5.read_block(1).startswith(d1_updated))
+
+        # Read offline Disk 0 on-the-fly -> MUST still be d0 (not wiped/zeroed!)
+        reconstructed_d0 = r5.read_block(0)
+        self.assertTrue(reconstructed_d0.startswith(d0), f"Expected d0 but got {reconstructed_d0[:20]}")
+
+        # Rebuild Disk 0 -> must permanently restore d0
+        r5.rebuild_disk(0)
+        self.assertEqual(r5.status, RAIDStatus.OPTIMAL)
+        self.assertTrue(r5.read_block(0).startswith(d0))
+        self.assertTrue(r5.read_block(1).startswith(d1_updated))
+
+        # --- RAID 4 ---
+        r4 = RAIDFactory.create(RAIDLevel.RAID_4, num_disks=3, disk_capacity=8, block_size=1024)
+        r4.write_block(0, d0)
+        r4.write_block(1, d1)
+
+        # Fail Disk 0
+        r4.fail_disk(0)
+        self.assertEqual(r4.status, RAIDStatus.DEGRADED)
+
+        # Write to online Disk 1
+        r4.write_block(1, d1_updated)
+        self.assertTrue(r4.read_block(1).startswith(d1_updated))
+
+        # Read offline Disk 0 on-the-fly -> MUST still be d0
+        self.assertTrue(r4.read_block(0).startswith(d0))
+
+        # Rebuild Disk 0
+        r4.rebuild_disk(0)
+        self.assertEqual(r4.status, RAIDStatus.OPTIMAL)
+        self.assertTrue(r4.read_block(0).startswith(d0))
+
+    def test_raid5_write_to_failed_disk_lba_updates_parity_and_rebuilds(self):
+        """Verify that writing directly to an LBA whose target disk is offline updates parity,
+        allowing on-the-fly read and subsequent rebuild of the newly written data (Hotfix item 1).
+        """
+        r5 = RAIDFactory.create(RAIDLevel.RAID_5, num_disks=3, disk_capacity=8, block_size=1024)
+        r5.write_block(0, b"OLD_D0")
+        r5.write_block(1, b"DATA_D1")
+
+        # Fail Disk 0 (holds LBA 0)
+        r5.fail_disk(0)
+        self.assertEqual(r5.status, RAIDStatus.DEGRADED)
+
+        # Write new data to LBA 0 while Disk 0 is offline
+        new_payload = b"NEW_DATA_ON_FAILED_DISK"
+        r5.write_block(0, new_payload)
+
+        # Read on-the-fly must reconstruct the newly written payload via parity
+        self.assertTrue(r5.read_block(0).startswith(new_payload))
+
+        # Rebuild Disk 0
+        r5.rebuild_disk(0)
+        self.assertEqual(r5.status, RAIDStatus.OPTIMAL)
+        self.assertTrue(r5.read_block(0).startswith(new_payload))
 
 
 if __name__ == "__main__":

@@ -135,6 +135,17 @@ class TestCLIIOCommands(unittest.TestCase):
         self.assertIn("DISCO DE ESTADO SÓLIDO (SSD)", res.output)
         self.assertIn("ARRANJOS RAID", res.output)
 
+    def test_io_status_pending_queue_zero_after_operations(self):
+        """Verify that io_status reports 0 pending requests after synchronous I/O operations (Hotfix item 2)."""
+        self.dispatcher.execute_line('write_file /test_io.log "Payload de teste para io_status"')
+        self.dispatcher.execute_line("read_file /test_io.log")
+
+        res = self.dispatcher.execute_line("io_status")
+        self.assertTrue(res.success)
+        self.assertIn("Requisições Pendentes na Fila: 0", res.output)
+        self.assertEqual(res.data["pending_queue_size"], 0)
+        self.assertGreater(res.data["total_requests"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

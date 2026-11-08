@@ -60,6 +60,8 @@ class SSDBlock:
 class SSDDevice:
     """Simulates a solid state drive with FTL mapping and Wear Leveling policies."""
 
+    is_solid_state: bool = True
+
     def __init__(
         self,
         logical_capacity: int = 16,

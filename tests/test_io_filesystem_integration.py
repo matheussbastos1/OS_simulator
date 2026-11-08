@@ -123,6 +123,47 @@ class TestIOFilesystemIntegration(unittest.TestCase):
         stats = ssd.get_wear_stats()
         self.assertGreater(stats["total_writes"], 5)
         self.assertLess(stats["std_dev_wear"], 2.0)
+        # Verify SSD does not accumulate mechanical seek tracks (Hotfix item 3)
+        self.assertEqual(io_manager.total_seek_tracks, 0)
+
+    def test_io_manager_queue_cleanup_and_completed_history(self):
+        """Verify that IOManager cleans up pending queue and records completed requests (Hotfix item 2)."""
+        disk = PhysicalDisk(disk_id=0, capacity_blocks=8, block_size=1024)
+        io_mgr = IOManager(storage_backend=disk)
+
+        self.assertEqual(len(io_mgr.queue), 0)
+        self.assertEqual(len(io_mgr.queue.get_completed_requests()), 0)
+
+        # Dispatch write
+        io_mgr.dispatch_write(0, b"TEST_PAYLOAD")
+        self.assertEqual(len(io_mgr.queue), 0)
+        self.assertEqual(len(io_mgr.queue.get_pending_requests()), 0)
+        completed = io_mgr.queue.get_completed_requests()
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].block_id, 0)
+
+        # Dispatch read
+        data = io_mgr.dispatch_read(0)
+        self.assertTrue(data.startswith(b"TEST_PAYLOAD"))
+        self.assertEqual(len(io_mgr.queue), 0)
+        self.assertEqual(len(io_mgr.queue.get_pending_requests()), 0)
+        self.assertEqual(len(io_mgr.queue.get_completed_requests()), 2)
+
+    def test_io_adapter_is_available_with_physical_disk_offline(self):
+        """Verify that IOBlockDeviceAdapter.is_available() detects offline PhysicalDisk (Hotfix item 4)."""
+        disk = PhysicalDisk(disk_id=0, capacity_blocks=8, block_size=1024)
+        io_mgr = IOManager(storage_backend=disk)
+        adapter = IOBlockDeviceAdapter(io_manager=io_mgr, logical_capacity=8, block_size=1024)
+
+        self.assertTrue(adapter.is_available(0))
+
+        # Fail disk
+        disk.fail()
+        self.assertFalse(adapter.is_available(0))
+
+        # Recover disk
+        disk.recover()
+        self.assertTrue(adapter.is_available(0))
 
 
 if __name__ == "__main__":

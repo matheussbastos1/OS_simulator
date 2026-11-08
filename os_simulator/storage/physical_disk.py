@@ -72,7 +72,7 @@ class PhysicalDisk:
         self._validate_online()
         self._validate_block_id(block_id)
         self.read_count += 1
-        return self.blocks[block_id].read()
+        return bytearray(self.blocks[block_id].data)
 
     def write_block(self, block_id: int, data: bytes | bytearray, is_parity: bool = False) -> None:
         """Write data to physical block."""

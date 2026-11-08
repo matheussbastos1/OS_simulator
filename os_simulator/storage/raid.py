@@ -176,6 +176,8 @@ class RAID0Controller(RAIDController):
         return RAIDStatus.OPTIMAL if self.failed_disks_count == 0 else RAIDStatus.FAILED
 
     def read_block(self, lba: int) -> bytearray:
+        if self.status == RAIDStatus.FAILED:
+            raise RAIDFailedException("Arranjo RAID 0 falhou devido a disco indisponível. Leitura bloqueada.")
         if not (0 <= lba < self.logical_capacity):
             raise IndexError(f"LBA {lba} fora dos limites do RAID 0 [0, {self.logical_capacity - 1}].")
         disk_idx = lba % self.num_disks
@@ -183,6 +185,8 @@ class RAID0Controller(RAIDController):
         return self.disks[disk_idx].read_block(pba)
 
     def write_block(self, lba: int, data: bytes | bytearray) -> None:
+        if self.status == RAIDStatus.FAILED:
+            raise RAIDFailedException("Arranjo RAID 0 falhou devido a disco indisponível. Escrita bloqueada.")
         if not (0 <= lba < self.logical_capacity):
             raise IndexError(f"LBA {lba} fora dos limites do RAID 0 [0, {self.logical_capacity - 1}].")
         disk_idx = lba % self.num_disks
@@ -250,10 +254,17 @@ class RAID1Controller(RAIDController):
         if source_disk is None:
             raise RAIDFailedException("Nenhum disco íntegro disponível para fonte de reconstrução no RAID 1.")
 
-        target_disk.recover()
+        replacement = PhysicalDisk(
+            disk_id=disk_id,
+            capacity_blocks=self.disk_capacity,
+            block_size=self.block_size,
+        )
+        target_idx = self.disks.index(target_disk)
+        self.disks[target_idx] = replacement
+
         for b_id in range(self.disk_capacity):
             data = source_disk.read_block(b_id)
-            target_disk.write_block(b_id, data)
+            replacement.write_block(b_id, data)
 
 
 class RAID4Controller(RAIDController):
@@ -320,27 +331,26 @@ class RAID4Controller(RAIDController):
         stripe_idx = lba // (self.num_disks - 1)
         target_disk = self.data_disks[data_disk_idx]
 
-        # 1. Update data disk if online
-        if target_disk.is_online:
+        padded_new = bytearray(self.block_size)
+        padded_new[: len(data)] = data
+
+        if target_disk.is_online and self.parity_disk.is_online:
+            # Differential Read-Modify-Write: preserves any other offline data disk
+            old_data = target_disk.read_block(stripe_idx)
+            old_parity = self.parity_disk.read_block(stripe_idx)
+            new_parity = xor_multiple([old_parity, old_data, padded_new], self.block_size)
             target_disk.write_block(stripe_idx, data)
-
-        # 2. Recompute and write parity across stripe if parity disk is online
-        if self.parity_disk.is_online:
-            stripe_buffers: List[bytearray] = []
-            for idx, d in enumerate(self.data_disks):
-                if idx == data_disk_idx:
-                    # Use new data
-                    padded = bytearray(self.block_size)
-                    padded[: len(data)] = data
-                    stripe_buffers.append(padded)
-                else:
-                    if d.is_online:
-                        stripe_buffers.append(d.read_block(stripe_idx))
-                    else:
-                        stripe_buffers.append(bytearray(self.block_size))
-
-            parity = xor_multiple(stripe_buffers, self.block_size)
-            self.parity_disk.write_block(stripe_idx, parity, is_parity=True)
+            self.parity_disk.write_block(stripe_idx, new_parity, is_parity=True)
+        elif (not target_disk.is_online) and self.parity_disk.is_online:
+            # Target data disk is offline; update parity using other online data disks + new payload
+            other_online = [
+                d.read_block(stripe_idx) for d in self.data_disks if d.disk_id != target_disk.disk_id
+            ]
+            new_parity = xor_multiple(other_online + [padded_new], self.block_size)
+            self.parity_disk.write_block(stripe_idx, new_parity, is_parity=True)
+        elif target_disk.is_online and (not self.parity_disk.is_online):
+            # Parity disk is offline; update data disk directly
+            target_disk.write_block(stripe_idx, data)
 
     def rebuild_disk(self, disk_id: int) -> None:
         """Reconstruct failed disk data using XOR of all other disks."""
@@ -351,14 +361,23 @@ class RAID4Controller(RAIDController):
         if target is None:
             raise ValueError(f"Disco {disk_id} não encontrado.")
 
-        target.recover()
+        replacement = PhysicalDisk(
+            disk_id=disk_id,
+            capacity_blocks=self.disk_capacity,
+            block_size=self.block_size,
+        )
+        target_idx = self.disks.index(target)
+        self.disks[target_idx] = replacement
+        self.data_disks = self.disks[:-1]
+        self.parity_disk = self.disks[-1]
+
         for stripe_idx in range(self.disk_capacity):
             other_buffers = [
                 d.read_block(stripe_idx) for d in self.disks if d.disk_id != disk_id
             ]
             reconstructed = xor_multiple(other_buffers, self.block_size)
-            is_parity_disk = target == self.parity_disk
-            target.write_block(stripe_idx, reconstructed, is_parity=is_parity_disk)
+            is_parity_disk = replacement == self.parity_disk
+            replacement.write_block(stripe_idx, reconstructed, is_parity=is_parity_disk)
 
 
 class RAID5Controller(RAIDController):
@@ -439,29 +458,28 @@ class RAID5Controller(RAIDController):
         target_disk = self.disks[disk_idx]
         parity_disk = self.disks[parity_disk_idx]
 
-        # 1. Write data if target disk is online
-        if target_disk.is_online:
+        padded_new = bytearray(self.block_size)
+        padded_new[: len(data)] = data
+
+        if target_disk.is_online and parity_disk.is_online:
+            # Differential Read-Modify-Write: preserves any other offline data disk
+            old_data = target_disk.read_block(stripe_idx)
+            old_parity = parity_disk.read_block(stripe_idx)
+            new_parity = xor_multiple([old_parity, old_data, padded_new], self.block_size)
             target_disk.write_block(stripe_idx, data)
-
-        # 2. Recalculate parity if parity disk is online
-        if parity_disk.is_online:
-            stripe_buffers: List[bytearray] = []
-            for d_idx, d in enumerate(self.disks):
-                if d_idx == parity_disk_idx:
-                    continue
-                if d_idx == disk_idx:
-                    # New data payload
-                    padded = bytearray(self.block_size)
-                    padded[: len(data)] = data
-                    stripe_buffers.append(padded)
-                else:
-                    if d.is_online:
-                        stripe_buffers.append(d.read_block(stripe_idx))
-                    else:
-                        stripe_buffers.append(bytearray(self.block_size))
-
-            parity = xor_multiple(stripe_buffers, self.block_size)
-            parity_disk.write_block(stripe_idx, parity, is_parity=True)
+            parity_disk.write_block(stripe_idx, new_parity, is_parity=True)
+        elif (not target_disk.is_online) and parity_disk.is_online:
+            # Target data disk is offline; update parity using other online data disks + new payload
+            other_online = [
+                d.read_block(stripe_idx)
+                for idx, d in enumerate(self.disks)
+                if idx != parity_disk_idx and idx != disk_idx
+            ]
+            new_parity = xor_multiple(other_online + [padded_new], self.block_size)
+            parity_disk.write_block(stripe_idx, new_parity, is_parity=True)
+        elif target_disk.is_online and (not parity_disk.is_online):
+            # Parity disk is offline; update data disk directly
+            target_disk.write_block(stripe_idx, data)
 
     def rebuild_disk(self, disk_id: int) -> None:
         """Reconstruct failed disk in RAID 5 using XOR across surviving members."""
@@ -473,7 +491,12 @@ class RAID5Controller(RAIDController):
             raise ValueError(f"Disco {disk_id} não encontrado.")
 
         target_idx = self.disks.index(target)
-        target.recover()
+        replacement = PhysicalDisk(
+            disk_id=disk_id,
+            capacity_blocks=self.disk_capacity,
+            block_size=self.block_size,
+        )
+        self.disks[target_idx] = replacement
 
         for stripe_idx in range(self.disk_capacity):
             other_buffers = [
@@ -483,7 +506,7 @@ class RAID5Controller(RAIDController):
             ]
             reconstructed = xor_multiple(other_buffers, self.block_size)
             is_parity = (target_idx == self._get_parity_disk_idx(stripe_idx))
-            target.write_block(stripe_idx, reconstructed, is_parity=is_parity)
+            replacement.write_block(stripe_idx, reconstructed, is_parity=is_parity)
 
 
 class RAIDFactory:

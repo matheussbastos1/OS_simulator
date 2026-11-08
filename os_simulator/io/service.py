@@ -36,6 +36,14 @@ class IOManager:
         self.total_seek_tracks = 0
         self.history_metrics: List[SeekMetrics] = []
 
+    @property
+    def is_solid_state(self) -> bool:
+        """Check if storage backend is a solid-state device (SSD)."""
+        if getattr(self.storage_backend, "is_solid_state", False):
+            return True
+        from os_simulator.io.ssd import SSDDevice
+        return isinstance(self.storage_backend, SSDDevice)
+
     def set_scheduler(self, scheduler: DiskScheduler) -> None:
         """Switch active disk arm scheduler."""
         scheduler.set_head(self.scheduler.current_head)
@@ -51,11 +59,15 @@ class IOManager:
         )
         self.queue.enqueue(req)
 
-        # Process through active scheduler
-        metrics = self.scheduler.schedule([req])
-        self.total_seek_tracks += metrics.total_seek_distance
+        seek_dist = 0
+        if not self.is_solid_state:
+            # Process through active scheduler for mechanical disk
+            metrics = self.scheduler.schedule([req])
+            seek_dist = metrics.total_seek_distance
+            self.total_seek_tracks += seek_dist
+            self.history_metrics.append(metrics)
+
         self.total_reads += 1
-        self.history_metrics.append(metrics)
 
         # Dispatch to storage backend
         try:
@@ -66,11 +78,13 @@ class IOManager:
             else:
                 raise AttributeError("Storage backend não implementa read_block ou read.")
 
-            req.mark_completed(result=data, seek_distance=metrics.total_seek_distance)
+            req.mark_completed(result=data, seek_distance=seek_dist)
             return data
         except Exception as exc:
             req.mark_failed(str(exc))
             raise
+        finally:
+            self.queue.remove(req)
 
     def dispatch_write(
         self,
@@ -88,11 +102,15 @@ class IOManager:
         )
         self.queue.enqueue(req)
 
-        # Process through active scheduler
-        metrics = self.scheduler.schedule([req])
-        self.total_seek_tracks += metrics.total_seek_distance
+        seek_dist = 0
+        if not self.is_solid_state:
+            # Process through active scheduler for mechanical disk
+            metrics = self.scheduler.schedule([req])
+            seek_dist = metrics.total_seek_distance
+            self.total_seek_tracks += seek_dist
+            self.history_metrics.append(metrics)
+
         self.total_writes += 1
-        self.history_metrics.append(metrics)
 
         # Dispatch to storage backend
         try:
@@ -103,10 +121,12 @@ class IOManager:
             else:
                 raise AttributeError("Storage backend não implementa write_block ou write.")
 
-            req.mark_completed(seek_distance=metrics.total_seek_distance)
+            req.mark_completed(seek_distance=seek_dist)
         except Exception as exc:
             req.mark_failed(str(exc))
             raise
+        finally:
+            self.queue.remove(req)
 
     def get_metrics_summary(self) -> Dict[str, Any]:
         """Return diagnostic metrics of I/O throughput and arm movements."""

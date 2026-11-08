@@ -123,6 +123,8 @@ class IOBlockDeviceAdapter(BlockDevicePort):
             from os_simulator.storage.raid import RAIDStatus
             if backend.status == RAIDStatus.FAILED:
                 return False
+        if not getattr(backend, "is_online", True):
+            return False
         return True
 
     def is_block_free(self, block_id: int) -> bool:

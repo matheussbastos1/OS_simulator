@@ -37,7 +37,11 @@ class SeekMetrics:
 
     def format_summary(self) -> str:
         """Render diagnostic report matching official academic format."""
-        seq_str = " → ".join(str(t) for t in [self.initial_head] + self.service_order)
+        if self.steps:
+            physical_seq = [self.initial_head] + [s.to_track for s in self.steps]
+        else:
+            physical_seq = [self.initial_head]
+        seq_str = " → ".join(str(t) for t in physical_seq)
         lines = [
             "======================================================================",
             "                   RELATÓRIO DE ESCALONAMENTO DE DISCO",
