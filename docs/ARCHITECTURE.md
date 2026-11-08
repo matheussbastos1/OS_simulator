@@ -100,19 +100,58 @@ flowchart LR
 ---
 
 ### 2.2. Arquitetura da Etapa 2: Entrada/Saída, Escalonamento e RAID
-Na Etapa 2, o adaptador de armazenamento provisório é substituído pelo subsistema completo de E/S. O `FileSystemService` continua chamando as mesmas operações da `BlockDevicePort`, mas agora cada operação transita pela fila de requisições, escalonador de cabeçote e controlador RAID.
+Na Etapa 2, o adaptador provisório de armazenamento (`InMemoryBlockDevice`) é substituído pelo subsistema completo de E/S através do adaptador `IOBlockDeviceAdapter`, que implementa a porta `BlockDevicePort`. O `FileSystemService` permanece completamente agnóstico sobre RAID, SSD ou cabeçotes de disco.
+
+Cada chamada de bloco (`read_block` / `write_block`) é traduzida em um `IORequest` com prioridade, enfileirada no `IOManager`, processada pelo algoritmo ativo de escalonamento mecânico (`DiskScheduler`) e roteada para o backend físico correspondente (`RAIDController`, `PhysicalDisk` ou `SSDDevice`).
 
 ```mermaid
 flowchart TD
-    FS["FileSystemService"] -->|BlockDevicePort| IO["IOBlockDeviceAdapter / IOManager"]
-    IO --> REQ["IORequest Generator (Leitura/Escrita)"]
-    REQ --> SCHED["DiskScheduler (FCFS, SSTF, SCAN, C-SCAN)"]
-    SCHED --> RAID["RAIDController (RAID 0, 1, 4, 5 + XOR Parity)"]
-    RAID --> DISK1["PhysicalDisk 1 (Trilhas/Setores)"]
-    RAID --> DISK2["PhysicalDisk 2 (Trilhas/Setores)"]
-    RAID --> DISK3["PhysicalDisk 3 (Trilhas/Setores)"]
-    SCHED -.-> SSD["SSDController (Wear Leveling)"]
+    subgraph FilesystemLayer ["Camada de Sistema de Arquivos"]
+        VFS["VirtualFileSystem (VFS)"]
+        FSS["FileSystemService"]
+        VFS --> FSS
+    end
+
+    subgraph PortBoundary ["Fronteira Arquitetural (Hexagonal)"]
+        PORT["BlockDevicePort (Interface Abstrata)"]
+        FSS --> PORT
+    end
+
+    subgraph IOInfrastructure ["Subsistema de E/S e Armazenamento (Etapa 2)"]
+        ADAPTER["IOBlockDeviceAdapter"]
+        PORT -.-> ADAPTER
+        
+        IOMAN["IOManager (Fila de E/S & Coordenação)"]
+        ADAPTER --> IOMAN
+        
+        REQ["IORequest / IOQueue"]
+        IOMAN --> REQ
+        
+        subgraph Schedulers ["Escalonadores de Braço Mecânico"]
+            SCHED["DiskScheduler (Interface)"]
+            FCFS["FCFS"]
+            SSTF["SSTF (208 trilhas)"]
+            SCAN["SCAN (Elevador)"]
+            CSCAN["C-SCAN"]
+            SCHED --- FCFS
+            SCHED --- SSTF
+            SCHED --- SCAN
+            SCHED --- CSCAN
+        end
+        REQ --> SCHED
+
+        subgraph Backends ["Dispositivos e Arranjos Físicos Simulados"]
+            RAID["RAIDController (RAID 0, 1, 4, 5)"]
+            SSD["SSDDevice (FTL & Wear Leveling)"]
+            PDSK["PhysicalDisk (Trilhas & Setores)"]
+        end
+        SCHED --> RAID
+        SCHED --> SSD
+        SCHED --> PDSK
+    end
 ```
+
+O `IOBlockDeviceAdapter` assegura compatibilidade retroativa total: gerencia a ocupação lógica de blocos requerida pelo `FileSystemService` e delega as leituras e escritas binárias ao `IOManager`. Em arranjos RAID 1, 4 ou 5, a falha de um disco físico é absorvida de forma transparente com reconstrução *on-the-fly* via paridade XOR ou espelhamento.
 
 ---
 

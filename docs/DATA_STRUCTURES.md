@@ -95,27 +95,37 @@ Para garantir transparência entre dados e sobrecarga estrutural:
 
 ---
 
-### 4.2. `PhysicalDisk` e `RAIDArray`
+### 4.2. `PhysicalDisk` e `RAIDController`
 | Campo | Especificação |
 |---|---|
-| **Classes** | `PhysicalDisk`, `RAIDArray` |
-| **Subsistema** | `io` |
-| **Atributos de PhysicalDisk** | • `disk_id: int` — Identificador numérico do disco.<br>• `total_blocks: int` — Total de blocos do disco.<br>• `tracks: int` — Total de cilindros/trilhas (padrão: 200).<br>• `current_head_position: int` — Trilha atual do cabeçote.<br>• `disk_type: DiskType` — Enum (`HDD`, `SSD`).<br>• `failed: bool` — Flag de falha física simulada.<br>• `blocks: Dict[int, DiskBlock]` — Coleção de blocos físicos mantidos na unidade.<br>• `write_cycles: Dict[int, int]` — Contador de escritas para SSD Wear Leveling. |
-| **Atributos de RAIDArray** | • `raid_level: RAIDLevel` — Enum (`RAID0`, `RAID1`, `RAID4`, `RAID5`).<br>• `physical_disks: List[PhysicalDisk]` — Discos integrantes do arranjo.<br>• `stripe_size: int` — Tamanho do stripe (padrão: 1 bloco = 4096 bytes).<br>• `status: RAIDStatus` — Enum (`OPTIMAL`, `DEGRADED`, `FAILED`). |
-| **Responsabilidades** | Simular a movimentação mecânica de cabeçote, cálculo de desgaste, paridade XOR e reconstrução transparente de blocos. |
+| **Classes** | `PhysicalDisk`, `RAIDController` (`RAID0Controller`, `RAID1Controller`, `RAID4Controller`, `RAID5Controller`, `RAIDFactory`) |
+| **Subsistema** | `storage` |
+| **Atributos de PhysicalDisk** | • `disk_id: int` — Identificador numérico do disco físico.<br>• `capacity_blocks: int` — Quantidade de blocos mantidos na unidade.<br>• `block_size: int` — Tamanho em bytes de cada bloco (padrão: 4096).<br>• `sectors_per_track: int` — Geometria de setores/blocos por trilha (padrão: 4).<br>• `total_tracks: int` — Número total de cilindros/trilhas calculado.<br>• `is_online: bool` — Indicador de integridade física (`True` online, `False` em falha simulada).<br>• `read_count: int` / `write_count: int` — Contadores operacionais.<br>• `blocks: List[DiskBlock]` — Coleção de blocos gerenciados exclusivamente pela camada de storage. |
+| **Atributos de RAIDController** | • `level: RAIDLevel` — Enum (`RAID_0`, `RAID_1`, `RAID_4`, `RAID_5`).<br>• `disks: List[PhysicalDisk]` — Coleção de discos físicos participantes.<br>• `status: RAIDStatus` — Enum de integridade (`OPTIMAL`, `DEGRADED`, `FAILED`).<br>• `logical_capacity: int` — Capacidade útil de blocos exposta ao Filesystem.<br>• `storage_efficiency: float` — Eficiência calculada ($	ext{capacidade útil} / 	ext{capacidade bruta}$). |
+| **Responsabilidades** | Distribuir dados em faixas (*striping*), manter espelhos, calcular paridade XOR e reconstruir blocos de discos em falha. |
 
 ---
 
-### 4.3. `IORequest` e `DiskScheduler`
+### 4.3. `IORequest`, `IOQueue` e `DiskScheduler`
 | Campo | Especificação |
 |---|---|
-| **Classes** | `IORequest`, `DiskScheduler` |
+| **Classes** | `IORequest`, `IOQueue`, `DiskScheduler`, `FCFSScheduler`, `SSTFScheduler`, `SCANScheduler`, `CSCANScheduler`, `SeekMetrics`, `SeekStep` |
 | **Subsistema** | `io` |
-| **Atributos de IORequest** | • `request_id: int` — ID sequencial da requisição.<br>• `operation_type: IOOperationType` — Enum (`READ`, `WRITE`).<br>• `target_block: int` — Bloco de destino.<br>• `target_track: int` — Trilha física onde o bloco reside.<br>• `data: Optional[bytearray]` — Carga útil de dados.<br>• `priority: IOPriority` — Enum (`LOW`, `NORMAL`, `HIGH`, `KERNEL`).<br>• `status: IORequestStatus` — Enum (`PENDING`, `COMPLETED`, `FAILED`). |
-| **Atributos de DiskScheduler** | • `algorithm: SchedulingAlgorithm` — Enum (`FCFS`, `SSTF`, `SCAN`, `CSCAN`).<br>• `request_queue: List[IORequest]` — Fila de requisições pendentes.<br>• `total_head_movement: int` — Acumulador da distância percorrida pelo braço em trilhas. |
-| **Responsabilidades** | Reordenar a fila de requisições mecânicas para minimizar o deslocamento do cabeçote. |
+| **Atributos de IORequest** | • `request_id: int` — Identificador sequencial da requisição.<br>• `operation: IOOperationType` — Enum (`READ`, `WRITE`).<br>• `block_id: int` — Endereço do bloco solicitado.<br>• `track: int` — Trilha física resolvida ($\lfloor 	ext{block\_id} / 	ext{sectors\_per\_track} floor$).<br>• `data: Optional[bytes | bytearray]` — Carga binária.<br>• `priority: IOPriority` — Nível de prioridade (`LOW`, `NORMAL`, `HIGH`, `CRITICAL`).<br>• `status: IORequestStatus` — Ciclo de vida (`QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`). |
+| **Atributos de DiskScheduler** | • `initial_head: int` / `current_head: int` — Posição atual do cabeçote mecânico.<br>• `min_track: int` / `max_track: int` — Limites do curso de busca (padrão: 0 a 199).<br>• `direction: DiskDirection` — Sentido do deslocamento (`UP` ou `DOWN`). |
+| **Atributos de SeekMetrics** | • `service_order: List[int]` — Ordem determinística de atendimento das trilhas.<br>• `total_seek_distance: int` — Somatório total das trilhas percorridas pelo braço.<br>• `steps: List[SeekStep]` — Histórico detalhado passo a passo da movimentação. |
+| **Responsabilidades** | Reordenar a fila de requisições mecânicas para otimizar o tempo de busca e evitar starvation. |
 
 ---
+
+### 4.4. `SSDDevice` e `SSDBlock` (Flash Translation Layer & Wear Leveling)
+| Campo | Especificação |
+|---|---|
+| **Classes** | `SSDDevice`, `SSDBlock`, `WearLevelingMode` |
+| **Subsistema** | `io.ssd` |
+| **Atributos de SSDBlock** | • `physical_id: int` — Endereço físico do bloco (PBA).<br>• `write_count: int` — Total acumulado de ciclos de escrita/apagamento sofridos.<br>• `is_valid: bool` — Flag de validade do dado residente.<br>• `is_free: bool` — Bloco disponível para nova alocação.<br>• `logical_id: Optional[int]` — LBA atualmente mapeado neste PBA. |
+| **Atributos de SSDDevice** | • `logical_capacity: int` — Capacidade lógica útil (LBAs visíveis).<br>• `physical_capacity: int` — Capacidade física total incluindo área de *overprovisioning*.<br>• `wear_mode: WearLevelingMode` — Estratégia ativa (`NONE`, `DYNAMIC`, `STATIC`).<br>• `ftl_map: Dict[int, int]` — Tabela de mapeamento lógico-físico (LBA $	o$ PBA).<br>• `static_threshold: int` — Limiar $(\max - \min)$ para disparo de nivelamento estático. |
+| **Responsabilidades** | Mapear LBAs para PBAs dinamicamente, redistribuir escritas para minimizar desgaste e calcular métricas estatísticas (desvio padrão e média de desgaste). |
 
 ## 5. SUBSISTEMA DE SEGURANÇA E PROTEÇÃO
 

@@ -103,7 +103,7 @@ cd "OS_simulator"
 git checkout dev
 ```
 
-### 6.2. Execução do Shell Interativo (Etapa 1 operacional)
+### 6.2. Execução do Shell Interativo (Etapas 1 e 2 operacionais)
 ```powershell
 # Iniciar o simulador interativo via Python
 python -m os_simulator.cli
@@ -128,6 +128,14 @@ Kernel inicializado com sucesso. Digite 'help' para comandos.
 | `write_file` | `write_file /sistema/logs/app.log "Novo Registro"` | Integração Auth $\to$ FS $\to$ BlockDevice |
 | `read_file` | `read_file /sistema/logs/app.log` | Integração Auth $\to$ FS $\to$ BlockDevice |
 | `fs_status` | `fs_status --details` | Sistema de Arquivos |
+| `io_status` | `io_status` | Gerenciamento de E/S (`IOManager`) |
+| `io_scheduler` | `io_scheduler --set scan` | Escalonamento de Disco (FCFS, SSTF, SCAN, C-SCAN) |
+| `io_benchmark` | `io_benchmark --queue 98,183,37,122,14 --head 53` | Benchmark Comparativo de Cabeçote |
+| `ssd_status` | `ssd_status --mode static` | SSD, FTL e Wear Leveling |
+| `raid_status` | `raid_status` | Diagnóstico de Arranjos RAID (0, 1, 4, 5) |
+| `raid_fail` | `raid_fail --disk 1` | Injeção de Falha Física em Disco Membro |
+| `raid_rebuild` | `raid_rebuild --disk 1` | Reconstrução Online via Paridade XOR |
+| `raid_init` | `raid_init --level 5 --disks 4` | Configuração Interativa de RAID |
 | `login` | `login --user carlos` | Segurança e Autenticação |
 | `chmod` | `chmod 750 /sistema/config.sys` | Segurança e ACL |
 | `encrypt_file` | `encrypt_file /home/carlos/segredo.txt --key "MinhaChave123"` | Segurança e Criptografia (AES-256-GCM) |
