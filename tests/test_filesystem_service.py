@@ -104,6 +104,9 @@ class TestFileSystemService(unittest.TestCase):
         self.assertIn("DIAGNÓSTICO DO SISTEMA DE ARQUIVOS", report)
         self.assertIn("INDEXADA (i-node)", report)
         self.assertIn("MAPA DE OCUPAÇÃO DOS BLOCOS", report)
+        self.assertIn("[00:I]", report)
+        self.assertIn("[01:D]", report)
+        self.assertIn("Legenda: . = Livre, D = Dados, I = Índice, X = Danificado", report)
 
 
 if __name__ == "__main__":

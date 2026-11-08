@@ -100,6 +100,22 @@ Cada etapa segue rigorosamente:
 
 ---
 
+### Fase 1.1 — Correções Técnicas Pós-Auditoria (Sistema de Arquivos)
+**Branch:** `fix/etapa-1-auditoria`  
+**Objetivo:** Eliminar as três ressalvas técnicas identificadas na auditoria de 08/11/2026: atomicidade de gravação com rollback em disco cheio, desacoplamento rigoroso entre alocação lógica e dispositivo de blocos, e diferenciação visual precisa no mapa de blocos (`[I]` vs `[D]`).
+
+- [x] Criar e alternar para a branch `fix/etapa-1-auditoria` a partir de `dev`.
+- [x] Implementar atomicidade e rollback em `write_data` contra falhas de espaço em disco nas 3 estratégias.
+- [x] Garantir reaproveitamento seguro de blocos em disco quase cheio (in-place expansion / delta allocation).
+- [x] Desacoplar estratégias de alocação de detalhes internos de `DiskBlock` e `InMemoryBlockDevice` (eliminação total de `hasattr`).
+- [x] Adicionar primitivas padronizadas `is_block_free` e `allocate_specific_blocks` à porta `BlockDevicePort`.
+- [x] Atualizar mapa de blocos em `fs_status --details` para distinguir `[I]` (índice), `[D]` (dados), `[.]` (livre) e `[X]` (danificado).
+- [x] Implementar suite de testes de regressão e validação (`tests/test_audit_fixes.py`).
+- [x] Validar cenário determinístico `FS-004` (transacionalidade de gravação) no Ground Truth.
+- [x] Atualizar documentação arquitetural e especificações de algoritmos.
+
+---
+
 ### Fase 2 — Entrada e Saída (I/O), Escalonamento e RAID
 **Branch:** `feature/etapa-2-io-raid`  
 **Objetivo:** Construir a camada de gerenciamento de requisições de E/S (`IORequest`), algoritmos de escalonamento de braço de disco magnético, simulação de SSD com Wear Leveling e arranjos redundantes de discos (RAID 0, 1, 4 e 5), substituindo o adaptador `InMemoryBlockDevice` pelo `IOManager` via `BlockDevicePort`.

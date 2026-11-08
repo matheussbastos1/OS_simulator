@@ -23,6 +23,19 @@ Para evitar redundância de dados ou ambiguidades de projeto:
 - Os objetos `DiskBlock` e os buffers de dados brutos **pertencem exclusivamente à camada de armazenamento (`io` / storage abstraction)**.
 - O subsistema `filesystem` manipula e armazena em seus i-nodes exclusivamente **identificadores numéricos lógicos de blocos (`block_id: int`)**. O conteúdo de um bloco só é acessado invocando `BlockDevicePort.read_block(block_id)` e `BlockDevicePort.write_block(block_id, data)`.
 
+### 1.3. Separação de Responsabilidades: Alocação Lógica vs. Armazenamento Físico
+Para manter o desacoplamento estrito exigido pela Arquitetura Hexagonal:
+1. **Estado Lógico de Ocupação:** É de responsabilidade exclusiva do **Filesystem**. A tabela de i-nodes rastreia quais blocos são de dados (`allocated_blocks`) e quais são de índice (`index_block_id`). A camada de armazenamento não possui conhecimento de i-nodes, arquivos ou metadados de índice.
+2. **Operações no Dispositivo:** A interface `BlockDevicePort` provê primitivas padronizadas de consulta e reserva:
+   - `is_block_free(block_id: int) -> bool`: Consulta se o bloco LBA está livre no dispositivo.
+   - `allocate_specific_blocks(block_ids: List[int]) -> List[int]`: Aloca blocos específicos solicitados (utilizado na alocação contígua e expansão in-place).
+   - `allocate_blocks(count: int) -> List[int]` e `allocate_block() -> int`: Aloca blocos livres arbitrários.
+   - `free_blocks(block_ids: List[int]) -> None` e `free_block(block_id: int) -> None`: Libera blocos de volta ao pool do dispositivo.
+   - Elimina-se qualquer uso de reflexão (`hasattr`) ou acesso direto a instâncias concretas de `DiskBlock` a partir do subsistema de arquivos.
+3. **Atomicidade e Transacionalidade de `write_file`:**
+   - As gravações são transacionais: em caso de falta de espaço (`DiskFullException`) ou fragmentação externa (`DiskFragmentationException`), o conteúdo anterior e seus metadados permanecem 100% preservados e legíveis.
+   - Em discos quase cheios, as estratégias realizam reutilização segura de blocos em disco (expansão in-place em contígua e encadeamento delta em FAT/Indexada), garantindo que arquivos existentes possam crescer consumindo apenas os blocos adicionais necessários.
+
 ```mermaid
 flowchart TD
     subgraph UI ["Camada de Apresentação"]
