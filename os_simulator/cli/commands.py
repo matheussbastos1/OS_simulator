@@ -4,9 +4,11 @@ import re
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
-from os_simulator.core.exceptions import OSSimulatorException
+from os_simulator.core.context import ExecutionContext
+from os_simulator.core.exceptions import OSSimulatorException, PermissionDeniedException
 from os_simulator.core.simulation_kernel import SimulationKernel
-from os_simulator.core.types import AllocationStrategy
+from os_simulator.core.types import AllocationStrategy, AuditEventType, PrivilegeMode
+from os_simulator.security.crypto import decrypt_file, encrypt_file
 from os_simulator.io.scheduler import (
     CSCANScheduler,
     FCFSScheduler,
@@ -100,6 +102,25 @@ class CommandDispatcher:
             "raid_fail": self.cmd_raid_fail,
             "raid_rebuild": self.cmd_raid_rebuild,
             "raid_init": self.cmd_raid_init,
+            # Security and Protection commands (Etapa 3)
+            "login": self.cmd_login,
+            "logout": self.cmd_logout,
+            "whoami": self.cmd_whoami,
+            "useradd": self.cmd_useradd,
+            "userdel": self.cmd_userdel,
+            "usermod": self.cmd_usermod,
+            "groupadd": self.cmd_groupadd,
+            "groupdel": self.cmd_groupdel,
+            "groups": self.cmd_groups,
+            "chmod": self.cmd_chmod,
+            "chown": self.cmd_chown,
+            "chgrp": self.cmd_chgrp,
+            "security_status": self.cmd_security_status,
+            "encrypt_file": self.cmd_encrypt_file,
+            "decrypt_file": self.cmd_decrypt_file,
+            "antivirus_scan": self.cmd_antivirus_scan,
+            "integrity_check": self.cmd_integrity_check,
+            "audit_log": self.cmd_audit_log,
             # System Help
             "help": self.cmd_help,
         }
@@ -122,7 +143,7 @@ class CommandDispatcher:
         if not args:
             return CommandResult(success=False, error="Sintaxe: mkdir <caminho_diretorio>")
         path = args[0]
-        node = self.kernel.fs_service.mkdir(path, cwd=self.kernel.get_cwd())
+        node = self.kernel.fs_service.mkdir(path, cwd=self.kernel.get_cwd(), context=self.kernel.context)
         return CommandResult(
             success=True,
             output=f"Diretório criado com sucesso: {node.get_path()}",
@@ -158,7 +179,7 @@ class CommandDispatcher:
                 idx += 1
 
         node = self.kernel.fs_service.create_file(
-            path, size_bytes=size_bytes, strategy=strategy, cwd=self.kernel.get_cwd()
+            path, size_bytes=size_bytes, strategy=strategy, cwd=self.kernel.get_cwd(), context=self.kernel.context
         )
         size_msg = f" com reserva de {size_bytes} bytes" if size_bytes > 0 else ""
         return CommandResult(
@@ -178,7 +199,7 @@ class CommandDispatcher:
         append = "--append" in args[2:]
 
         result = self.kernel.fs_service.write_file(
-            path, content, append=append, cwd=self.kernel.get_cwd()
+            path, content, append=append, cwd=self.kernel.get_cwd(), context=self.kernel.context
         )
 
         real_size = result["real_size"]
@@ -207,21 +228,21 @@ class CommandDispatcher:
         if not args:
             return CommandResult(success=False, error="Sintaxe: read_file <caminho_arquivo>")
         path = args[0]
-        content = self.kernel.fs_service.read_file(path, cwd=self.kernel.get_cwd())
+        content = self.kernel.fs_service.read_file(path, cwd=self.kernel.get_cwd(), context=self.kernel.context)
         return CommandResult(success=True, output=content, data={"content": content})
 
     def cmd_delete_file(self, args: List[str]) -> CommandResult:
         if not args:
             return CommandResult(success=False, error="Sintaxe: delete_file <caminho_arquivo>")
         path = args[0]
-        self.kernel.fs_service.delete_file(path, cwd=self.kernel.get_cwd())
+        self.kernel.fs_service.delete_file(path, cwd=self.kernel.get_cwd(), context=self.kernel.context)
         return CommandResult(success=True, output=f"Arquivo excluído com sucesso: '{path}'.")
 
     def cmd_delete_directory(self, args: List[str]) -> CommandResult:
         if not args:
             return CommandResult(success=False, error="Sintaxe: delete_directory <caminho_diretorio>")
         path = args[0]
-        self.kernel.fs_service.delete_directory(path, cwd=self.kernel.get_cwd())
+        self.kernel.fs_service.delete_directory(path, cwd=self.kernel.get_cwd(), context=self.kernel.context)
         return CommandResult(success=True, output=f"Diretório excluído com sucesso: '{path}'.")
 
     def cmd_fs_status(self, args: List[str]) -> CommandResult:
@@ -664,6 +685,429 @@ class CommandDispatcher:
         except Exception as exc:
             return CommandResult(success=False, error=str(exc))
 
+    # --------------------------------------------------------------------------
+    # Security, Access Control and Protection Handlers (Etapa 3)
+    # --------------------------------------------------------------------------
+    def cmd_login(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(
+                success=False, error="Sintaxe: login --user <nome> [--password <senha>]"
+            )
+        username = None
+        password = ""
+        idx = 0
+        while idx < len(args):
+            arg = args[idx]
+            if arg == "--user" and idx + 1 < len(args):
+                username = args[idx + 1]
+                idx += 2
+            elif arg.startswith("--user="):
+                username = arg.split("=", 1)[1]
+                idx += 1
+            elif arg == "--password" and idx + 1 < len(args):
+                password = args[idx + 1]
+                idx += 2
+            elif arg.startswith("--password="):
+                password = arg.split("=", 1)[1]
+                idx += 1
+            elif not arg.startswith("-") and username is None:
+                username = arg
+                idx += 1
+            elif not arg.startswith("-") and password == "":
+                password = arg
+                idx += 1
+            else:
+                idx += 1
+
+        if not username:
+            return CommandResult(
+                success=False, error="Sintaxe: login --user <nome> [--password <senha>]"
+            )
+
+        new_ctx = self.kernel.auth_service.login(username, password)
+        self.kernel.context = new_ctx
+        mode_label = "MODO_KERNEL" if new_ctx.is_kernel_mode() else "MODO_USUARIO"
+        output_msg = (
+            f"Autenticado com sucesso.\n"
+            f"Usuário: '{username}' | Grupo: '{new_ctx.primary_group}' | Modo: {mode_label}"
+        )
+        return CommandResult(
+            success=True,
+            output=output_msg,
+            data={"username": username, "context": new_ctx},
+        )
+
+    def cmd_logout(self, args: List[str]) -> CommandResult:
+        self.kernel.auth_service.logout(self.kernel.context)
+        self.kernel.context = ExecutionContext(
+            user_id=65534,
+            username="nobody",
+            groups=["nogroup"],
+            privilege_mode=PrivilegeMode.USER_MODE,
+            cwd="/",
+        )
+        return CommandResult(success=True, output="Sessão encerrada com sucesso.")
+
+    def cmd_whoami(self, args: List[str]) -> CommandResult:
+        ctx = self.kernel.context
+        mode_str = (
+            "MODO_KERNEL (Anel 0)" if ctx.is_kernel_mode() else "MODO_USUARIO (Anel 3)"
+        )
+        lines = [
+            f"Usuário Ativo        : {ctx.username} (UID: {ctx.user_id})",
+            f"Grupos               : {', '.join(ctx.groups)}",
+            f"Anel de Privilégio   : {mode_str}",
+            f"Diretório de Trabalho: {ctx.cwd}",
+        ]
+        return CommandResult(
+            success=True, output="\n".join(lines), data={"username": ctx.username}
+        )
+
+    def cmd_useradd(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: useradd <nome> [--group <grp>] [--groups <g1,g2>] [--password <senha>]",
+            )
+        username = args[0]
+        primary_group = "users"
+        supplementary: List[str] = []
+        password = None
+
+        idx = 1
+        while idx < len(args):
+            flag = args[idx]
+            if flag == "--group" and idx + 1 < len(args):
+                primary_group = args[idx + 1]
+                idx += 2
+            elif flag == "--groups" and idx + 1 < len(args):
+                supplementary = [
+                    g.strip() for g in args[idx + 1].split(",") if g.strip()
+                ]
+                idx += 2
+            elif flag == "--password" and idx + 1 < len(args):
+                password = args[idx + 1]
+                idx += 2
+            else:
+                idx += 1
+
+        self.kernel.user_manager.useradd(
+            username=username,
+            password=password,
+            primary_group=primary_group,
+            supplementary_groups=supplementary,
+        )
+        return CommandResult(
+            success=True, output=f"Usuário '{username}' criado com sucesso."
+        )
+
+    def cmd_userdel(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(success=False, error="Sintaxe: userdel <nome>")
+        username = args[0]
+        self.kernel.user_manager.userdel(username)
+        return CommandResult(
+            success=True, output=f"Usuário '{username}' removido com sucesso."
+        )
+
+    def cmd_groupadd(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(success=False, error="Sintaxe: groupadd <nome>")
+        group_name = args[0]
+        self.kernel.user_manager.groupadd(group_name)
+        return CommandResult(
+            success=True, output=f"Grupo '{group_name}' criado com sucesso."
+        )
+
+    def cmd_groupdel(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(success=False, error="Sintaxe: groupdel <nome>")
+        group_name = args[0]
+        self.kernel.user_manager.groupdel(group_name)
+        return CommandResult(
+            success=True, output=f"Grupo '{group_name}' removido com sucesso."
+        )
+
+    def cmd_usermod(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: usermod <nome> [--group <grp>] [--append-groups <g1,g2>] [--password <senha>]",
+            )
+        username = args[0]
+        primary_group = None
+        add_groups = None
+        password = None
+        idx = 1
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--group", "-g") and idx + 1 < len(args):
+                primary_group = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--group="):
+                primary_group = flag.split("=", 1)[1]
+                idx += 1
+            elif flag in ("--append-groups", "-aG", "--groups") and idx + 1 < len(args):
+                add_groups = [g.strip() for g in args[idx + 1].split(",") if g.strip()]
+                idx += 2
+            elif flag.startswith(("--append-groups=", "--groups=")):
+                add_groups = [g.strip() for g in flag.split("=", 1)[1].split(",") if g.strip()]
+                idx += 1
+            elif flag == "--password" and idx + 1 < len(args):
+                password = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--password="):
+                password = flag.split("=", 1)[1]
+                idx += 1
+            else:
+                idx += 1
+
+        self.kernel.user_manager.usermod(
+            username=username,
+            primary_group=primary_group,
+            add_groups=add_groups,
+            password=password,
+        )
+        return CommandResult(
+            success=True, output=f"Usuário '{username}' modificado com sucesso."
+        )
+
+    def cmd_groups(self, args: List[str]) -> CommandResult:
+        username = args[0] if args else self.kernel.context.username
+        user = self.kernel.user_manager.get_user(username)
+        if user is None:
+            return CommandResult(
+                success=False, error=f"Usuário '{username}' não encontrado."
+            )
+        groups_str = " ".join(user.groups)
+        return CommandResult(
+            success=True,
+            output=f"{username} : {groups_str}",
+            data={"username": username, "groups": user.groups},
+        )
+
+    def cmd_chmod(self, args: List[str]) -> CommandResult:
+        if len(args) < 2:
+            return CommandResult(
+                success=False, error="Sintaxe: chmod <modo_octal> <caminho>"
+            )
+        mode = args[0]
+        path = args[1]
+        new_mode = self.kernel.security_manager.chmod(self.kernel.context, path, mode)
+        return CommandResult(
+            success=True,
+            output=f"Permissões de '{path}' alteradas para {new_mode}.",
+        )
+
+    def cmd_chown(self, args: List[str]) -> CommandResult:
+        if len(args) < 2:
+            return CommandResult(
+                success=False, error="Sintaxe: chown <dono>[:<grupo>] <caminho>"
+            )
+        owner_spec = args[0]
+        path = args[1]
+        if ":" in owner_spec:
+            owner, group = owner_spec.split(":", 1)
+            owner = owner if owner else None
+            group = group if group else None
+        else:
+            owner = owner_spec
+            group = None
+
+        new_owner, new_group = self.kernel.security_manager.chown(
+            self.kernel.context, path, owner=owner, group=group
+        )
+        return CommandResult(
+            success=True,
+            output=f"Propriedade de '{path}' alterada para {new_owner}:{new_group}.",
+        )
+
+    def cmd_chgrp(self, args: List[str]) -> CommandResult:
+        if len(args) < 2:
+            return CommandResult(
+                success=False, error="Sintaxe: chgrp <grupo> <caminho>"
+            )
+        group = args[0]
+        path = args[1]
+        _, new_group = self.kernel.security_manager.chown(
+            self.kernel.context, path, group=group
+        )
+        return CommandResult(
+            success=True,
+            output=f"Grupo de '{path}' alterado para '{new_group}'.",
+        )
+
+    def cmd_encrypt_file(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(
+                success=False, error="Sintaxe: encrypt_file <caminho> [--key <chave>]"
+            )
+        path = args[0]
+        key = "default_aes_key_simulated_32b!"
+        idx = 1
+        while idx < len(args):
+            if args[idx] == "--key" and idx + 1 < len(args):
+                key = args[idx + 1]
+                idx += 2
+            elif args[idx].startswith("--key="):
+                key = args[idx].split("=", 1)[1]
+                idx += 1
+            else:
+                idx += 1
+
+        res = encrypt_file(
+            self.kernel.fs_service, path, key, cwd=self.kernel.get_cwd()
+        )
+        lines = [
+            f"[encrypt_file] Arquivo criptografado com sucesso: {path}",
+            f"Algoritmo Criptográfico     : AES-256-GCM (Autenticado)",
+            f"Tamanho Original (Plaintext) : {res['original_size']} bytes",
+            f"Tamanho Cifrado (com Tag/IV) : {res['encrypted_size']} bytes",
+            f"Blocos de Armazenamento      : {res['allocated_blocks']}",
+        ]
+        if res.get("allocated_blocks"):
+            b0 = res["allocated_blocks"][0]
+            raw_b0 = self.kernel.device.read_block(b0)
+            hex_preview = "0x" + bytes(raw_b0[:16]).hex().upper() + "... (Encrypted Ciphertext)"
+            lines.append("")
+            lines.append("Conteúdo gravado nos blocos físicos:")
+            lines.append(hex_preview)
+        return CommandResult(success=True, output="\n".join(lines), data=res)
+
+    def cmd_decrypt_file(self, args: List[str]) -> CommandResult:
+        if not args:
+            return CommandResult(
+                success=False, error="Sintaxe: decrypt_file <caminho> [--key <chave>]"
+            )
+        path = args[0]
+        key = "default_aes_key_simulated_32b!"
+        idx = 1
+        while idx < len(args):
+            if args[idx] == "--key" and idx + 1 < len(args):
+                key = args[idx + 1]
+                idx += 2
+            elif args[idx].startswith("--key="):
+                key = args[idx].split("=", 1)[1]
+                idx += 1
+            else:
+                idx += 1
+
+        plaintext_bytes = decrypt_file(
+            self.kernel.fs_service,
+            path,
+            key,
+            in_place=True,
+            cwd=self.kernel.get_cwd(),
+        )
+        return CommandResult(
+            success=True,
+            output=f"[decrypt_file] Arquivo '{path}' descriptografado com sucesso ({len(plaintext_bytes)} bytes restaurados).",
+            data={"plaintext": plaintext_bytes},
+        )
+
+    def cmd_antivirus_scan(self, args: List[str]) -> CommandResult:
+        path = args[0] if args else "/"
+        report = self.kernel.antivirus_scanner.scan_path(
+            path, context=self.kernel.context
+        )
+        report_text = report.format_report()
+        return CommandResult(
+            success=True, output=report_text, data={"report": report}
+        )
+
+    def cmd_integrity_check(self, args: List[str]) -> CommandResult:
+        path = args[0] if args else "/"
+        register = "--register" in args
+        if register:
+            clean_args = [a for a in args if a != "--register"]
+            target_path = clean_args[0] if clean_args else path
+            node = self.kernel.fs_service.vfs.get_node(target_path, cwd=self.kernel.get_cwd())
+            if node is None:
+                return CommandResult(success=False, error=f"Caminho não encontrado: '{target_path}'.")
+            from os_simulator.filesystem.node import DirectoryNode
+            if isinstance(node, DirectoryNode):
+                recs = self.kernel.integrity_checker.register_tree_baseline(
+                    self.kernel.fs_service, target_path, self.kernel.catalog
+                )
+                return CommandResult(
+                    success=True,
+                    output=f"Linha de base de integridade registrada para {len(recs)} arquivos em '{target_path}'.",
+                )
+            else:
+                rec = self.kernel.integrity_checker.register_file_baseline(
+                    self.kernel.fs_service, target_path, self.kernel.catalog
+                )
+                return CommandResult(
+                    success=True,
+                    output=f"Linha de base de integridade registrada para '{target_path}' (SHA-256: {rec.expected_sha256[:16]}...).",
+                )
+
+        report = self.kernel.antivirus_scanner.scan_path(path, context=self.kernel.context)
+        return CommandResult(success=True, output=report.format_report(), data={"report": report})
+
+    def cmd_security_status(self, args: List[str]) -> CommandResult:
+        ctx = self.kernel.context
+        mode_str = "MODO_KERNEL (Anel 0)" if ctx.is_kernel_mode() else "MODO_USUARIO (Anel 3)"
+        total_users = len(self.kernel.user_manager.list_users())
+        total_groups = len(self.kernel.user_manager.list_groups())
+        total_events = len(self.kernel.audit_log.get_events(limit=10000))
+        catalog_count = len(self.kernel.catalog.records) if hasattr(self.kernel, "catalog") else 0
+        lines = [
+            "======================================================================",
+            "                   STATUS DO SISTEMA DE SEGURANÇA",
+            "======================================================================",
+            f"Usuário Ativo            : {ctx.username} (UID: {ctx.user_id})",
+            f"Grupo Primário           : {ctx.primary_group}",
+            f"Grupos da Sessão         : {', '.join(ctx.groups)}",
+            f"Anel de Privilégio       : {mode_str}",
+            f"Diretório de Trabalho    : {ctx.cwd}",
+            "----------------------------------------------------------------------",
+            "Mecanismo de Autenticação: PBKDF2-HMAC-SHA256 (600.000 iterações, salt 16B)",
+            "Cifra de Armazenamento   : AES-256-GCM (Nonce 12B, Tag 16B)",
+            f"Total de Usuários        : {total_users}",
+            f"Total de Grupos          : {total_groups}",
+            f"Registros no Baseline    : {catalog_count} arquivos monitorados",
+            f"Eventos de Auditoria     : {total_events} registrados",
+            "======================================================================",
+        ]
+        return CommandResult(success=True, output="\n".join(lines))
+
+    def cmd_audit_log(self, args: List[str]) -> CommandResult:
+        limit = 50
+        user_filter = None
+        type_filter = None
+        idx = 0
+        while idx < len(args):
+            flag = args[idx]
+            if flag == "--limit" and idx + 1 < len(args):
+                limit = int(args[idx + 1])
+                idx += 2
+            elif flag.startswith("--limit="):
+                limit = int(flag.split("=", 1)[1])
+                idx += 1
+            elif flag == "--user" and idx + 1 < len(args):
+                user_filter = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--user="):
+                user_filter = flag.split("=", 1)[1]
+                idx += 1
+            elif flag == "--type" and idx + 1 < len(args):
+                type_filter = args[idx + 1].upper()
+                idx += 2
+            elif flag.startswith("--type="):
+                type_filter = flag.split("=", 1)[1].upper()
+                idx += 1
+            else:
+                idx += 1
+
+        events = self.kernel.audit_log.get_events(
+            limit=limit,
+            username=user_filter,
+            event_type=type_filter,
+        )
+        output = self.kernel.audit_log.format_events(limit=limit)
+        return CommandResult(success=True, output=output, data={"events": events})
+
     def cmd_help(self, args: List[str]) -> CommandResult:
         lines = [
             "======================================================================",
@@ -695,6 +1139,26 @@ class CommandDispatcher:
             "  raid_fail --disk <id>             : Simula falha física de um disco no arranjo",
             "  raid_rebuild --disk <id>          : Reconstrói dados do disco falho via redundância",
             "  raid_init --level <0|1|4|5>       : Inicializa novo arranjo RAID na simulação",
+            "",
+            "SEGURANÇA E PROTEÇÃO (ETAPA 3):",
+            "  login --user <nome> [--password]  : Inicia sessão com verificação PBKDF2",
+            "  logout                            : Encerra a sessão ativa",
+            "  whoami                            : Exibe usuário ativo, grupos e anel de privilégio",
+            "  groups [<usuario>]                : Exibe os grupos aos quais o usuário pertence",
+            "  useradd <nome> [--group <g>]      : Cria novo usuário no sistema",
+            "  userdel <nome>                    : Remove usuário existente",
+            "  usermod <nome> [--group <g>]      : Modifica atributos de usuário e grupos",
+            "  groupadd <nome>                   : Cria novo grupo no sistema",
+            "  groupdel <nome>                   : Remove grupo existente",
+            "  chmod <modo> <caminho>            : Altera permissões rwx (ex.: 750, 644)",
+            "  chown <dono>[:<grupo>] <caminho>  : Transfere propriedade de arquivo/diretório",
+            "  chgrp <grupo> <caminho>           : Altera o grupo proprietário de arquivo/diretório",
+            "  security_status                   : Exibe resumo e métricas do sistema de segurança",
+            "  encrypt_file <caminho> [--key <k>]: Criptografa arquivo com AES-256-GCM",
+            "  decrypt_file <caminho> [--key <k>]: Descriptografa arquivo e valida tag AEAD",
+            "  antivirus_scan [<caminho>]        : Executa varredura de integridade e assinaturas",
+            "  integrity_check [<caminho>]       : Valida ou registra linha de base de integridade",
+            "  audit_log [--limit <n>]           : Exibe a trilha de auditoria do sistema",
             "",
             "SISTEMA:",
             "  help                              : Exibe esta lista de ajuda",

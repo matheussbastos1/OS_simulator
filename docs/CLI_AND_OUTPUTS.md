@@ -229,8 +229,90 @@
 
 ---
 
-### 2.14. `login`
-### 2.10. `create_process`
+### 2.14. Comandos de Segurança e Proteção (Etapa 3)
+
+#### 2.14.1. `login`
+- **Sintaxe Oficial:** `login --user <nome> [--password <senha>]`
+- **Exemplo do Professor:** `login --user carlos`
+- **Subsistema:** `security.auth` (`AuthenticationService`).
+- **Comportamento:** Calcula PBKDF2-HMAC-SHA256 com 600.000 iterações e salt de 16 bytes. Inicializa o contexto de execução ativo com o anel correspondente (`MODO_USUARIO` ou `MODO_KERNEL`). Registra evento no `AuditLog`.
+- **Exemplo de Saída:**
+  ```text
+  Autenticado com sucesso.
+  Usuário: 'carlos' | Grupo: 'devs' | Modo: MODO_USUARIO
+  ```
+
+#### 2.14.2. `logout`
+- **Sintaxe Oficial:** `logout`
+- **Subsistema:** `security.auth`.
+- **Comportamento:** Encerra a sessão ativa e redefine o contexto para o usuário não privilegiado `nobody`.
+
+#### 2.14.3. `whoami`
+- **Sintaxe Oficial:** `whoami`
+- **Subsistema:** `security`.
+- **Comportamento:** Exibe o usuário autenticado, UID, grupos associados, anel de privilégio e diretório de trabalho corrente.
+
+#### 2.14.4. `groups`
+- **Sintaxe Oficial:** `groups [<usuario>]`
+- **Subsistema:** `security.user`.
+- **Comportamento:** Exibe a lista de grupos do usuário informado ou do usuário ativo da sessão.
+
+#### 2.14.5. `useradd`
+- **Sintaxe Oficial:** `useradd <nome> [--group <grupo_primario>] [--groups <suplementares>] [--password <senha>]`
+- **Subsistema:** `security.user` (`UserManager`).
+- **Pré-condições:** Privilégio administrativo (`root` / `MODO_KERNEL`).
+
+#### 2.14.6. `userdel`
+- **Sintaxe Oficial:** `userdel <nome>`
+- **Subsistema:** `security.user` (`UserManager`).
+- **Pré-condições:** Privilégio administrativo. Bloqueia terminantemente a remoção do superusuário `root`.
+
+#### 2.14.7. `usermod`
+- **Sintaxe Oficial:** `usermod <nome> [--group <grp>] [--append-groups <g1,g2>] [--password <senha>]`
+- **Subsistema:** `security.user` (`UserManager`).
+- **Pré-condições:** Privilégio administrativo.
+
+#### 2.14.8. `groupadd` e `groupdel`
+- **Sintaxe Oficial:** `groupadd <nome>` / `groupdel <nome>`
+- **Subsistema:** `security.user` (`UserManager`).
+- **Pré-condições:** Privilégio administrativo. `groupdel` impede a remoção de grupos essenciais do sistema (`root`, `admin`, `users`) ou que sejam grupos primários de usuários ativos.
+
+#### 2.14.9. `chmod`
+- **Sintaxe Oficial:** `chmod <modo_octal|simbolico> <caminho>`
+- **Exemplo do Professor:** `chmod 750 /sistema/config.sys`
+- **Subsistema:** `security.acl` (`SecurityManager`).
+- **Pré-condições:** Usuário deve ser proprietário do recurso ou `root`.
+
+#### 2.14.10. `chown` e `chgrp`
+- **Sintaxe Oficial:** `chown <dono>[:<grupo>] <caminho>` / `chgrp <grupo> <caminho>`
+- **Subsistema:** `security.acl` (`SecurityManager`).
+- **Pré-condições:** `chown` exige `root` para alterar proprietário.
+
+#### 2.14.11. `security_status`
+- **Sintaxe Oficial:** `security_status`
+- **Subsistema:** `security`.
+- **Comportamento:** Exibe relatório consolidado com usuário ativo, grupos, anel de privilégio, estatísticas de usuários, grupos, baseline e eventos de auditoria.
+
+#### 2.14.12. `encrypt_file` e `decrypt_file`
+- **Sintaxe Oficial:** `encrypt_file <caminho> [--key <chave>]` / `decrypt_file <caminho> [--key <chave>]`
+- **Exemplo do Professor:** `encrypt_file /home/carlos/segredo.txt`
+- **Subsistema:** `security.crypto`.
+- **Comportamento:** Aplica cifra autêntica AES-256-GCM com nonce de 12 bytes e tag de 16 bytes. Os blocos físicos passam a armazenar apenas texto cifrado, validando a tag AEAD na leitura.
+
+#### 2.14.13. `antivirus_scan` e `integrity_check`
+- **Sintaxe Oficial:** `antivirus_scan [<caminho>]` / `integrity_check [--register] <caminho>`
+- **Exemplo do Professor:** `antivirus_scan /`
+- **Subsistema:** `security.integrity`.
+- **Comportamento:** Varredura recursiva de diretórios com verificação de hashes SHA-256 de blocos contra o catálogo oficial assinado por HMAC do Kernel, detectando blocos adulterados e assinaturas maliciosas simuladas.
+
+#### 2.14.14. `audit_log`
+- **Sintaxe Oficial:** `audit_log [--user <u_id>] [--type <evento>] [--limit <n>]`
+- **Subsistema:** `security.audit` (`AuditLog`).
+- **Comportamento:** Exibe a trilha de auditoria inviolável de acessos concedidos, acessos negados, autenticações e operações privilegiadas.
+
+---
+
+### 2.15. `create_process`
 - **Sintaxe Oficial:** `create_process --name "<nome>" --size <tamanho> --type <critical|normal>`
 - **Exemplos do Professor:**
   - `create_process --name "Kernel_DiskDriver" --size 512KB --type critical`
@@ -335,7 +417,44 @@ Fragmentação Interna       : 2.048 bytes
 Fragmentação Externa       : 0 bytes (alocação indexada bem-sucedida)
 ```
 
-### 3.3. Diagnóstico e Compactação da Área Reservada (`memory_status --reserved` e `memory_compact --reserved`)
+### 3.4. Cenário de Segurança 3.1 — Autenticação e Fiscalização de ACL
+```text
+login --user carlos
+Senha: **********
+Autenticado com sucesso.
+Usuário: 'carlos' | Grupo: 'devs' | Modo: MODO_USUARIO
+
+read_file /sistema/config.sys
+
+[SISTEMA DE SEGURANÇA - VERIFICAÇÃO DE ACL]
+Objeto      : /sistema/config.sys
+Proprietário: root (Grupo: admin)
+Permissões  : rwxr-x--- (750)
+Ação Pedida : LEITURA por 'carlos' (Grupo: devs)
+
+[NEGADO]: O usuário 'carlos' não possui permissão de leitura no objeto '/sistema/config.sys'.
+Tentativa não autorizada registrada nos logs do sistema.
+```
+
+### 3.5. Cenário de Segurança 3.2 — Criptografia em Repouso e Varredura de Antivírus
+```text
+encrypt_file /home/carlos/segredo.txt
+Arquivo '/home/carlos/segredo.txt' criptografado com sucesso.
+
+Conteúdo gravado nos blocos físicos:
+0x8F4A12B... (Encrypted Ciphertext)
+
+antivirus_scan /
+
+[MÓDULO DE SEGURANÇA - VARREDURA DE INTEGRIDADE]
+Analisando arquivos em busca de assinaturas maliciosas e hashes corrompidos...
+
+/home/carlos/segredo.txt : [OK - Criptografado e Íntegro]
+/sistema/logs/app.log    : [ALERTA] Hash do bloco difere do registro oficial!
+
+Resultado: Possível modificação direta não autorizada no bloco do disco.
+```
+
 ```text
 ======================================================================
               DIAGNÓSTICO DA ÁREA DE MEMÓRIA RESERVADA

@@ -41,8 +41,36 @@ class PrivilegeMode(str, Enum):
     KERNEL_MODE = "KERNEL_MODE"
     USER_MODE = "USER_MODE"
 
+    # Aliases for Portuguese academic terms
+    MODO_KERNEL = "KERNEL_MODE"
+    MODO_USUARIO = "USER_MODE"
+
 
 class ProcessType(str, Enum):
     """Process priority / allocation type."""
     CRITICAL = "CRITICAL"
     NORMAL = "NORMAL"
+
+
+class AuditEventType(str, Enum):
+    """Types of security events recorded in the audit log."""
+    ACCESS_GRANTED = "ACCESS_GRANTED"
+    ACCESS_DENIED = "ACCESS_DENIED"
+    LOGIN_SUCCESS = "LOGIN_SUCCESS"
+    LOGIN_FAILED = "LOGIN_FAILED"
+    LOGOUT = "LOGOUT"
+    PRIVILEGE_ELEVATION = "PRIVILEGE_ELEVATION"
+    PERMISSION_CHANGED = "PERMISSION_CHANGED"
+    OWNERSHIP_CHANGED = "OWNERSHIP_CHANGED"
+    USER_MANAGEMENT = "USER_MANAGEMENT"
+    TAMPER_DETECTED = "TAMPER_DETECTED"
+    CRYPTO_OPERATION = "CRYPTO_OPERATION"
+
+
+class FileScanStatus(str, Enum):
+    """Status classification for files in integrity / antivirus scans."""
+    OK = "OK"
+    OK_ENCRYPTED = "OK_ENCRYPTED"
+    MODIFIED = "MODIFIED"
+    SUSPICIOUS = "SUSPICIOUS"
+    INACCESSIBLE = "INACCESSIBLE"

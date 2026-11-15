@@ -1,7 +1,7 @@
 """Abstract ports and provisional adapters for OS Simulator."""
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import Any, List, Optional
 
 from os_simulator.core.context import ExecutionContext
 
@@ -83,24 +83,28 @@ class AuthorizationPort(ABC):
     """Abstract port for security and access authorization."""
 
     @abstractmethod
-    def check_read(self, context: ExecutionContext, path: str) -> bool:
+    def check_read(self, context: ExecutionContext, path: str, inode: Optional[Any] = None) -> bool:
         """Verify read permission for resource."""
         raise NotImplementedError
 
     @abstractmethod
-    def check_write(self, context: ExecutionContext, path: str) -> bool:
+    def check_write(self, context: ExecutionContext, path: str, inode: Optional[Any] = None) -> bool:
         """Verify write permission for resource."""
         raise NotImplementedError
 
     @abstractmethod
-    def check_execute(self, context: ExecutionContext, path: str) -> bool:
-        """Verify execute permission for resource."""
+    def check_execute(self, context: ExecutionContext, path: str, inode: Optional[Any] = None) -> bool:
+        """Verify execute / traversal permission for resource."""
         raise NotImplementedError
 
     @abstractmethod
     def is_admin(self, context: ExecutionContext) -> bool:
         """Check administrative/kernel privileges."""
         raise NotImplementedError
+
+    def check_traverse(self, context: ExecutionContext, path: str) -> bool:
+        """Verify directory traversal permission along path components."""
+        return True
 
 
 class BootstrapSecurityPolicy(AuthorizationPort):
@@ -110,14 +114,17 @@ class BootstrapSecurityPolicy(AuthorizationPort):
     premature password storage or complex ACL engine implementations.
     """
 
-    def check_read(self, context: ExecutionContext, path: str) -> bool:
+    def check_read(self, context: ExecutionContext, path: str, inode: Optional[Any] = None) -> bool:
         return True
 
-    def check_write(self, context: ExecutionContext, path: str) -> bool:
+    def check_write(self, context: ExecutionContext, path: str, inode: Optional[Any] = None) -> bool:
         return True
 
-    def check_execute(self, context: ExecutionContext, path: str) -> bool:
+    def check_execute(self, context: ExecutionContext, path: str, inode: Optional[Any] = None) -> bool:
         return True
 
     def is_admin(self, context: ExecutionContext) -> bool:
         return context.is_root()
+
+    def check_traverse(self, context: ExecutionContext, path: str) -> bool:
+        return True

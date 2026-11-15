@@ -91,3 +91,54 @@ class PermissionDeniedException(SecurityException):
 class AuthenticationFailedException(SecurityException):
     """Raised when credentials verification fails."""
     pass
+
+
+class IntegrityException(SecurityException):
+    """Base class for integrity, hash, and tampering errors."""
+    pass
+
+
+class TamperDetectedException(IntegrityException):
+    """Raised when unauthorized modification or tampering is detected."""
+    pass
+
+
+class DecryptionFailedException(SecurityException):
+    """Raised when authenticated decryption fails (invalid tag, bad key, or tampered ciphertext)."""
+    pass
+
+
+class UserNotFoundException(SecurityException):
+    """Raised when a specified user does not exist."""
+    pass
+
+
+class UserAlreadyExistsException(SecurityException):
+    """Raised when attempting to create a user that already exists."""
+    pass
+
+
+class GroupNotFoundException(SecurityException):
+    """Raised when a specified group does not exist."""
+    pass
+
+
+class GroupAlreadyExistsException(SecurityException):
+    """Raised when attempting to create a group that already exists."""
+    pass
+
+
+class PrivilegeViolationException(SecurityException):
+    """Raised when an unauthorized privilege ring escalation is attempted."""
+    pass
+
+
+class InvalidTagException(DecryptionFailedException, AuthenticationFailedException):
+    """Raised when cryptographic authentication tag verification fails (e.g. data tampering)."""
+    pass
+
+
+class CryptoKeyException(SecurityException):
+    """Raised when an encryption key is invalid, missing, or improperly sized."""
+    pass
+
