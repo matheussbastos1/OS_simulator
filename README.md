@@ -99,11 +99,11 @@ git clone https://github.com/matheussbastos1/OS_simulator.git
 # Acessar a pasta do projeto
 cd "OS_simulator"
 
-# Verificar a branch ativa e comutar para dev
-git checkout dev
+# Instalar dependências da Etapa 3 (biblioteca cryptography para AES-256-GCM)
+pip install -r requirements.txt
 ```
 
-### 6.2. Execução do Shell Interativo (Etapas 1 e 2 operacionais)
+### 6.2. Execução do Shell Interativo (Etapas 1, 2 e 3 operacionais)
 ```powershell
 # Iniciar o simulador interativo via Python
 python -m os_simulator.cli
@@ -136,10 +136,24 @@ Kernel inicializado com sucesso. Digite 'help' para comandos.
 | `raid_fail` | `raid_fail --disk 1` | Injeção de Falha Física em Disco Membro |
 | `raid_rebuild` | `raid_rebuild --disk 1` | Reconstrução Online via Paridade XOR |
 | `raid_init` | `raid_init --level 5 --disks 4` | Configuração Interativa de RAID |
-| `login` | `login --user carlos` | Segurança e Autenticação |
-| `chmod` | `chmod 750 /sistema/config.sys` | Segurança e ACL |
-| `encrypt_file` | `encrypt_file /home/carlos/segredo.txt --key "MinhaChave123"` | Segurança e Criptografia (AES-256-GCM) |
-| `antivirus_scan` | `antivirus_scan /` | Segurança e Integridade |
+| `login` | `login --user carlos [--password <senha>]` | Autenticação Segura (PBKDF2-HMAC-SHA256, 600k iterações) |
+| `logout` | `logout` | Encerramento de Sessão e Limpeza de Contexto |
+| `whoami` | `whoami` | Consulta de Usuário Ativo, Grupos e Anel de Privilégio |
+| `groups` | `groups [<usuario>]` | Consulta de Grupos do Usuário Ativo ou Alvo |
+| `useradd` | `useradd <nome> [--group <grp>] [--password <senha>]` | Cadastro de Usuário e Inicialização de Salt/Hash |
+| `userdel` | `userdel <nome>` | Remoção de Usuário (Proteção contra remoção do root) |
+| `usermod` | `usermod <nome> [--group <grp>] [--append-groups <g1,g2>]` | Modificação de Associação a Grupos e Credenciais |
+| `groupadd` | `groupadd <nome>` | Cadastro de Novo Grupo POSIX |
+| `groupdel` | `groupdel <nome>` | Remoção de Grupo (Proteção de grupos essenciais) |
+| `chmod` | `chmod 750 /sistema/config.sys` | Controle de Acesso por ACL (Octal e Simbólico) |
+| `chown` | `chown root:admin /sistema/config.sys` | Transferência de Propriedade e Grupo |
+| `chgrp` | `chgrp admin /sistema/config.sys` | Alteração de Grupo Proprietário |
+| `security_status` | `security_status` | Diagnóstico Global do Subsistema de Segurança |
+| `encrypt_file` | `encrypt_file /home/carlos/segredo.txt --key "MinhaChave123"` | Criptografia Real em Repouso (AES-256-GCM, Nonce 12B, Tag 16B) |
+| `decrypt_file` | `decrypt_file /home/carlos/segredo.txt --key "MinhaChave123"` | Descriptografia com Validação de Integridade/Tag AEAD |
+| `antivirus_scan` | `antivirus_scan /` | Varredura Recursiva de Assinaturas e Hashes Físicos |
+| `integrity_check`| `integrity_check [--register] <caminho>` | Auditoria e Registro de Linha de Base Assinada pelo Kernel |
+| `audit_log` | `audit_log [--user <u_id>] [--type <evento>]` | Consulta Estruturada de Trilha de Auditoria |
 | `create_process` | `create_process --name "Kernel_DiskDriver" --size 512KB --type critical` | Processos e Área Reservada Contígua |
 | `create_process` | `create_process --name "App_Navegador" --size 10KB --type normal` | Processos e Área Dinâmica Paginada |
 | `terminate_process` | `terminate_process --name "Kernel_NetDriver"` | Processos e Memória |

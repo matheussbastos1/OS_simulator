@@ -146,18 +146,18 @@ Cada etapa segue rigorosamente:
 **Branch:** `feature/etapa-3-security`  
 **Objetivo:** Construir o subsistema de controle de segurança substituindo `BootstrapSecurityPolicy` pelo `SecurityManager` via `AuthorizationPort`, com PBKDF2-HMAC-SHA256 (600k iterações), controle de acesso por ACLs e permissões POSIX, anéis de privilégio (Usuário vs. Kernel), auditoria, criptografia AES-256-GCM em repouso e antivírus simulado.
 
-- [ ] Implementar as entidades `User` e `Group`, gerenciando identidades e associações múltiplas.
-- [ ] Implementar o serviço de autenticação com derivação de chave criptográfica via PBKDF2-HMAC-SHA256 (600.000 iterações) e salts de 16 bytes (`secrets.token_bytes`).
-- [ ] Implementar o modelo de anéis de execução: Modo Usuário (Ring 3) e Modo Kernel (Ring 0).
-- [ ] Implementar a classe `ACL` com validação de permissões `rwx` para Proprietário, Grupo e Outros, com conversão octal (`0o755`, `0o750`, `0o644`, etc.).
-- [ ] Substituir o adaptador provisório de segurança por `SecurityManager` na porta `AuthorizationPort`.
-- [ ] Implementar o subsistema de Auditoria (`AuditLog`), registrando acessos concedidos, negados, logins e operações privilegiadas.
-- [ ] Implementar criptografia AES-256-GCM com nonce exclusivo de 12 bytes, tag de autenticação e separação de chaves.
-- [ ] Implementar o verificador de integridade via hash SHA-256 de blocos e HMAC do Kernel para prevenir adulterações coordenadas.
-- [ ] Implementar o motor de antivírus simulado (`antivirus_scan`) baseado em assinaturas simuladas.
-- [ ] Implementar os comandos da CLI: `login --user`, `chmod`, `encrypt_file --key`, `antivirus_scan`.
-- [ ] Validar e homologar os cenários determinísticos `SEC-001`, `SEC-002` e `SEC-003` do `tests/GROUND_TRUTH.md`.
-- [ ] Consolidar commits e integrar à `dev`.
+- [x] Implementar as entidades `User` e `Group`, gerenciando identidades e associações múltiplas.
+- [x] Implementar o serviço de autenticação com derivação de chave criptográfica via PBKDF2-HMAC-SHA256 (600.000 iterações) e salts de 16 bytes (`secrets.token_bytes`).
+- [x] Implementar o modelo de anéis de execução: Modo Usuário (Ring 3) e Modo Kernel (Ring 0).
+- [x] Implementar a classe `ACL` com validação de permissões `rwx` para Proprietário, Grupo e Outros, com conversão octal (`0o755`, `0o750`, `0o644`, etc.).
+- [x] Substituir o adaptador provisório de segurança por `SecurityManager` na porta `AuthorizationPort`.
+- [x] Implementar o subsistema de Auditoria (`AuditLog`), registrando acessos concedidos, negados, logins e operações privilegiadas.
+- [x] Implementar criptografia AES-256-GCM com nonce exclusivo de 12 bytes, tag de autenticação e separação de chaves.
+- [x] Implementar o verificador de integridade via hash SHA-256 de blocos e HMAC do Kernel para prevenir adulterações coordenadas.
+- [x] Implementar o motor de antivírus simulado (`antivirus_scan`) baseado em assinaturas simuladas.
+- [x] Implementar os comandos da CLI: `login --user`, `chmod`, `encrypt_file --key`, `antivirus_scan`.
+- [x] Validar e homologar os cenários determinísticos `SEC-001`, `SEC-002` e `SEC-003` do `tests/GROUND_TRUTH.md`.
+- [x] Consolidar commits semânticos na branch feature/etapa-3-security e enviar para origin (preservando dev e main sem merge).
 
 ---
 
@@ -190,5 +190,5 @@ Cada etapa segue rigorosamente:
 | `v0.1.1` | Fase 0.1 | Revisão de Consistência, Portas/Adaptadores e Alinhamento CLI | Concluído |
 | `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação via Adaptador em Memória | Concluído |
 | `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Concluído (Pronto para Homologação) |
-| `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Não iniciado |
+| `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Concluído (Homologado 100%) |
 | `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Não iniciado |
