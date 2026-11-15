@@ -18,3 +18,25 @@ class ExecutionContext:
     def is_root(self) -> bool:
         """Return True if active user has administrative privileges."""
         return self.user_id == 0 or self.username == "root" or self.privilege_mode == PrivilegeMode.KERNEL_MODE
+
+    @property
+    def primary_group(self) -> str:
+        """Return primary group of the active user."""
+        return self.groups[0] if self.groups else "users"
+
+    def is_kernel_mode(self) -> bool:
+        """Return True if current privilege mode is KERNEL_MODE."""
+        return self.privilege_mode == PrivilegeMode.KERNEL_MODE
+
+    def is_user_mode(self) -> bool:
+        """Return True if current privilege mode is USER_MODE."""
+        return self.privilege_mode == PrivilegeMode.USER_MODE
+
+    def is_admin(self) -> bool:
+        """Check administrative privileges (equivalent to is_root)."""
+        return self.is_root()
+
+    def has_group(self, group: str) -> bool:
+        """Check if user belongs to the specified group."""
+        return group in self.groups
+
