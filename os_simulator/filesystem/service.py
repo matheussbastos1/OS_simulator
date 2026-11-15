@@ -3,10 +3,12 @@
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from os_simulator.core.context import ExecutionContext
 from os_simulator.core.exceptions import (
     FileNotFoundException,
     InodeTableExhaustedException,
     IsADirectoryException,
+    PermissionDeniedException,
 )
 from os_simulator.core.ports import AuthorizationPort, BlockDevicePort, BootstrapSecurityPolicy
 from os_simulator.core.types import AllocationStrategy, BlockStatus, NodeType
@@ -65,15 +67,23 @@ class FileSystemService:
         self.next_inode_id += 1
         return allocated_id
 
-    def mkdir(self, path: str, cwd: str = "/") -> DirectoryNode:
+    def mkdir(self, path: str, cwd: str = "/", context: Optional[ExecutionContext] = None) -> DirectoryNode:
         """Create a new directory in the hierarchy."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_write"):
+            self.auth.enforce_write(ctx, path)
+        elif not self.auth.check_write(ctx, path):
+            raise PermissionDeniedException(f"Permissão de escrita negada para '{path}'.")
+
         inode_id = self._allocate_inode_id()
+        owner = ctx.username
+        group = getattr(ctx, "primary_group", ctx.groups[0] if ctx.groups else "root")
         dir_inode = Inode(
             inode_id=inode_id,
             node_type=NodeType.DIRECTORY,
             permissions="755",
-            owner="root",
-            group="root",
+            owner=owner,
+            group=group,
             allocation_strategy=self.default_strategy,
         )
         try:
@@ -89,18 +99,27 @@ class FileSystemService:
         size_bytes: int = 0,
         strategy: Optional[AllocationStrategy] = None,
         cwd: str = "/",
+        context: Optional[ExecutionContext] = None,
     ) -> FileNode:
         """Create a file, optionally pre-allocating size_bytes."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_write"):
+            self.auth.enforce_write(ctx, path)
+        elif not self.auth.check_write(ctx, path):
+            raise PermissionDeniedException(f"Permissão de escrita negada para '{path}'.")
+
         chosen_strategy = strategy or self.default_strategy
         inode_id = self._allocate_inode_id()
 
+        owner = ctx.username
+        group = getattr(ctx, "primary_group", ctx.groups[0] if ctx.groups else "root")
         file_inode = Inode(
             inode_id=inode_id,
             node_type=NodeType.FILE,
             file_size=0,
             permissions="644",
-            owner="root",
-            group="root",
+            owner=owner,
+            group=group,
             allocation_strategy=chosen_strategy,
         )
 
@@ -126,14 +145,21 @@ class FileSystemService:
         content: str | bytes | bytearray,
         append: bool = False,
         cwd: str = "/",
+        context: Optional[ExecutionContext] = None,
     ) -> Dict[str, Any]:
         """Write content into file, allocating necessary blocks."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_write"):
+            self.auth.enforce_write(ctx, path)
+        elif not self.auth.check_write(ctx, path):
+            raise PermissionDeniedException(f"Permissão de escrita negada para '{path}'.")
+
         raw_data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
 
         node = self.vfs.get_node(path, cwd)
         if node is None:
             # Create file implicitly if missing
-            file_node = self.create_file(path, size_bytes=0, cwd=cwd)
+            file_node = self.create_file(path, size_bytes=0, cwd=cwd, context=context)
         elif isinstance(node, FileNode):
             file_node = node
         else:
@@ -163,23 +189,41 @@ class FileSystemService:
             "external_fragmentation": 0,  # 0 for this file's allocation
         }
 
-    def read_file(self, path: str, cwd: str = "/") -> str:
+    def read_file(self, path: str, cwd: str = "/", context: Optional[ExecutionContext] = None) -> str:
         """Read and return string content of a file."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_read"):
+            self.auth.enforce_read(ctx, path)
+        elif not self.auth.check_read(ctx, path):
+            raise PermissionDeniedException(f"Permissão de leitura negada para '{path}'.")
+
         node = self.vfs.get_file(path, cwd)
         inode = self.inode_table[node.inode_id]
         strategy_handler = AllocationStrategyFactory.get_strategy(inode.allocation_strategy)
         data = strategy_handler.read_data(self.device, inode)
         return data.decode("utf-8", errors="replace")
 
-    def read_file_bytes(self, path: str, cwd: str = "/") -> bytearray:
+    def read_file_bytes(self, path: str, cwd: str = "/", context: Optional[ExecutionContext] = None) -> bytearray:
         """Read and return raw binary content of a file."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_read"):
+            self.auth.enforce_read(ctx, path)
+        elif not self.auth.check_read(ctx, path):
+            raise PermissionDeniedException(f"Permissão de leitura negada para '{path}'.")
+
         node = self.vfs.get_file(path, cwd)
         inode = self.inode_table[node.inode_id]
         strategy_handler = AllocationStrategyFactory.get_strategy(inode.allocation_strategy)
         return strategy_handler.read_data(self.device, inode)
 
-    def delete_file(self, path: str, cwd: str = "/") -> None:
+    def delete_file(self, path: str, cwd: str = "/", context: Optional[ExecutionContext] = None) -> None:
         """Delete file from tree and release its blocks and i-node."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_write"):
+            self.auth.enforce_write(ctx, path)
+        elif not self.auth.check_write(ctx, path):
+            raise PermissionDeniedException(f"Permissão de escrita negada para '{path}'.")
+
         node = self.vfs.get_file(path, cwd)
         inode = self.inode_table[node.inode_id]
         strategy_handler = AllocationStrategyFactory.get_strategy(inode.allocation_strategy)
@@ -187,8 +231,14 @@ class FileSystemService:
         self.inode_table.pop(inode.inode_id, None)
         self.vfs.delete_file(path, cwd)
 
-    def delete_directory(self, path: str, cwd: str = "/") -> None:
+    def delete_directory(self, path: str, cwd: str = "/", context: Optional[ExecutionContext] = None) -> None:
         """Delete an empty directory."""
+        ctx = context or ExecutionContext()
+        if hasattr(self.auth, "enforce_write"):
+            self.auth.enforce_write(ctx, path)
+        elif not self.auth.check_write(ctx, path):
+            raise PermissionDeniedException(f"Permissão de escrita negada para '{path}'.")
+
         freed_inode_id = self.vfs.delete_directory(path, cwd)
         self.inode_table.pop(freed_inode_id, None)
 

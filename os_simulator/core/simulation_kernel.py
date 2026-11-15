@@ -9,6 +9,11 @@ from os_simulator.filesystem.service import FileSystemService
 from os_simulator.io.scheduler import DiskScheduler, SSTFScheduler
 from os_simulator.io.service import IOManager
 from os_simulator.io.ssd import SSDDevice
+from os_simulator.security.audit import AuditLog
+from os_simulator.security.auth import AuthenticationService
+from os_simulator.security.integrity import AntivirusScanner, BaselineCatalog, IntegrityChecker
+from os_simulator.security.service import SecurityManager
+from os_simulator.security.user import UserManager
 from os_simulator.storage.adapter import IOBlockDeviceAdapter
 from os_simulator.storage.memory_block_device import InMemoryBlockDevice
 from os_simulator.storage.physical_disk import PhysicalDisk
@@ -29,9 +34,22 @@ class SimulationKernel:
         raid_controller: Optional[RAIDController] = None,
         ssd_device: Optional[SSDDevice] = None,
         scheduler: Optional[DiskScheduler] = None,
+        kernel_secret: Optional[bytes] = None,
     ):
         self.context = ExecutionContext()
-        self.auth = auth_port or BootstrapSecurityPolicy()
+        self.kernel_secret = kernel_secret or b"os_simulator_kernel_secret_key_32!!"
+        self.audit_log = AuditLog()
+        self.user_manager = UserManager()
+        self.auth_service = AuthenticationService(
+            user_manager=self.user_manager,
+            audit_log=self.audit_log,
+        )
+        self.security_manager = SecurityManager(
+            user_manager=self.user_manager,
+            auth_service=self.auth_service,
+            audit_log=self.audit_log,
+        )
+        self.auth = auth_port or self.security_manager
 
         # 1. Initialize SSD simulation (available for SSD diagnostic and benchmark)
         self.ssd_device = ssd_device or SSDDevice(logical_capacity=16, block_size=block_size)
@@ -80,6 +98,21 @@ class SimulationKernel:
             block_device=self.device,
             auth_port=self.auth,
             default_strategy=default_strategy,
+        )
+        if isinstance(self.auth, SecurityManager):
+            self.auth.set_filesystem(self.fs_service)
+        if hasattr(self.user_manager, "set_filesystem"):
+            self.user_manager.set_filesystem(self.fs_service)
+
+        self.catalog = BaselineCatalog(kernel_secret=self.kernel_secret)
+        self.integrity_checker = IntegrityChecker()
+        self.antivirus_scanner = AntivirusScanner(
+            fs_service=self.fs_service,
+            catalog=self.catalog,
+            auth_port=self.auth,
+            audit_log=self.audit_log,
+            checker=self.integrity_checker,
+            kernel_secret=self.kernel_secret,
         )
         self.is_running = True
 
