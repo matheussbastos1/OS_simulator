@@ -165,20 +165,20 @@ Cada etapa segue rigorosamente:
 **Branch:** `feature/etapa-4-memory`  
 **Objetivo:** Construir o subsistema de gerenciamento de memória dividido em Área Reservada Contígua e Área Dinâmica Paginada (MMU, Page Tables, molduras, Page Fault com origens válidas, políticas LRU e Segunda Chance, e Swap integrado via `BlockDevicePort`).
 
-- [ ] Implementar a abstração de Memória Física (`PhysicalMemory`) dividida em Área Reservada e Área Dinâmica.
-- [ ] Implementar o gerenciador da Área Reservada Contígua com alocação First-Fit / Best-Fit de `MemorySegment`.
-- [ ] Implementar o cálculo de fragmentação externa na Área Reservada e o algoritmo de desfragmentação / compactação (`memory_compact --reserved`).
-- [ ] Implementar a infraestrutura de Memória Paginada: `PageTable`, `PageTableEntry` (bits: present, dirty, referenced, last_access, e `page_origin`) e molduras físicas (`Frame`).
-- [ ] Implementar o componente `MMU` para tradução de endereços lógicos em físicos: $(p, d) \to (f, d)$.
-- [ ] Implementar o tratamento de `PageFaultException` distinguindo origens: Imagem de Processo, Zero-Fill-on-Demand e Swap.
-- [ ] Implementar descarte de página vítima limpa (`dirty == False`) e swap-out de página modificada (`dirty == True`).
-- [ ] Implementar a política de substituição de páginas LRU (Least Recently Used) baseada em idade/timestamp de acesso.
-- [ ] Implementar a política de substituição Segunda Chance (Clock Algorithm) baseada no bit de referência.
-- [ ] Implementar a partição de `SwapManager` integrada ao armazenamento secundário simulado via `BlockDevicePort`.
-- [ ] Implementar cálculo de fragmentação interna na última página lógica do processo.
-- [ ] Implementar a integração completa com o ciclo de vida de processos (`create_process --name --size --type`, `terminate_process --name`, `execute_step --process --instruction`).
-- [ ] Validar e homologar os cenários determinísticos `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004A`, `MEM-004B` e `MEM-005` do `tests/GROUND_TRUTH.md`.
-- [ ] Consolidar commits e integrar à `dev`.
+- [x] Implementar a abstração de Memória Física (`PhysicalMemory`) dividida em Área Reservada e Área Dinâmica.
+- [x] Implementar o gerenciador da Área Reservada Contígua com alocação First-Fit / Best-Fit de `MemorySegment`.
+- [x] Implementar o cálculo de fragmentação externa na Área Reservada e o algoritmo de desfragmentação / compactação (`memory_compact --reserved`).
+- [x] Implementar a infraestrutura de Memória Paginada: `PageTable`, `PageTableEntry` (bits: present, dirty, referenced, last_access, e `page_origin`) e molduras físicas (`Frame`).
+- [x] Implementar o componente `MMU` para tradução de endereços lógicos em físicos: $(p, d) \to (f, d)$.
+- [x] Implementar o tratamento de `PageFaultException` distinguindo origens: Imagem de Processo, Zero-Fill-on-Demand e Swap.
+- [x] Implementar descarte de página vítima limpa (`dirty == False`) e swap-out de página modificada (`dirty == True`).
+- [x] Implementar a política de substituição de páginas LRU (Least Recently Used) baseada em idade/timestamp de acesso.
+- [x] Implementar a política de substituição Segunda Chance (Clock Algorithm) baseada no bit de referência.
+- [x] Implementar a partição de `SwapManager` integrada ao armazenamento secundário simulado via `BlockDevicePort`.
+- [x] Implementar cálculo de fragmentação interna na última página lógica do processo.
+- [x] Implementar a integração completa com o ciclo de vida de processos (`create_process --name --size --type`, `terminate_process --name`, `execute_step --process --instruction`).
+- [x] Validar e homologar os cenários determinísticos `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004A`, `MEM-004B` e `MEM-005` do `tests/GROUND_TRUTH.md`.
+- [x] Consolidar commits e preparar branch para validação.
 
 ---
 
@@ -191,4 +191,4 @@ Cada etapa segue rigorosamente:
 | `v0.2.0` | Fase 1 | Sistema de Arquivos VFS, i-nodes e Alocação via Adaptador em Memória | Concluído |
 | `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Concluído (Pronto para Homologação) |
 | `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Concluído (Homologado 100%) |
-| `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Não iniciado |
+| `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Concluído (Homologado 100%) |
