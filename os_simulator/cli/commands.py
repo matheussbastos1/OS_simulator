@@ -5,9 +5,9 @@ import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
 from os_simulator.core.context import ExecutionContext
-from os_simulator.core.exceptions import OSSimulatorException, PermissionDeniedException
+from os_simulator.core.exceptions import OSSimulatorException, PageFaultException, PermissionDeniedException
 from os_simulator.core.simulation_kernel import SimulationKernel
-from os_simulator.core.types import AllocationStrategy, AuditEventType, PrivilegeMode
+from os_simulator.core.types import AllocationStrategy, AuditEventType, PrivilegeMode, ProcessType, ReplacementAlgorithm
 from os_simulator.security.crypto import decrypt_file, encrypt_file
 from os_simulator.io.scheduler import (
     CSCANScheduler,
@@ -35,6 +35,11 @@ def parse_size_string(size_str: str) -> int:
         "GB": 1024 * 1024 * 1024,
     }
     return int(val_num * multipliers[unit])
+
+
+def _fmt_kb(val: int) -> str:
+    """Format integers with dot thousand separators (Portuguese locale standard: 1.024 KB)."""
+    return f"{val:,}".replace(",", ".")
 
 
 class CommandResult:
@@ -121,6 +126,16 @@ class CommandDispatcher:
             "antivirus_scan": self.cmd_antivirus_scan,
             "integrity_check": self.cmd_integrity_check,
             "audit_log": self.cmd_audit_log,
+            # Process and Memory management commands (Etapa 4)
+            "create_process": self.cmd_create_process,
+            "terminate_process": self.cmd_terminate_process,
+            "memory_status": self.cmd_memory_status,
+            "memory_compact": self.cmd_memory_compact,
+            "translate_address": self.cmd_translate_address,
+            "execute_step": self.cmd_execute_step,
+            "page_replacement": self.cmd_page_replacement,
+            "page_table": self.cmd_page_table,
+            "memory_map": self.cmd_memory_map,
             # System Help
             "help": self.cmd_help,
         }
@@ -1108,6 +1123,600 @@ class CommandDispatcher:
         output = self.kernel.audit_log.format_events(limit=limit)
         return CommandResult(success=True, output=output, data={"events": events})
 
+    # =========================================================================
+    # PROCESS AND MEMORY SUBSYSTEM HANDLERS (ETAPA 4)
+    # =========================================================================
+
+    def cmd_create_process(self, args: List[str]) -> CommandResult:
+        """Create a new process with either contiguous (critical) or paged (normal) memory."""
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: create_process --name \"<nome>\" --size <tamanho> --type <critical|normal>",
+            )
+
+        name = None
+        size_str = None
+        type_str = "normal"
+
+        idx = 0
+        positionals = []
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--name", "-n") and idx + 1 < len(args):
+                name = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--name="):
+                name = flag.split("=", 1)[1]
+                idx += 1
+            elif flag in ("--size", "-s") and idx + 1 < len(args):
+                size_str = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--size="):
+                size_str = flag.split("=", 1)[1]
+                idx += 1
+            elif flag in ("--type", "-t") and idx + 1 < len(args):
+                type_str = args[idx + 1].lower()
+                idx += 2
+            elif flag.startswith("--type="):
+                type_str = flag.split("=", 1)[1].lower()
+                idx += 1
+            elif flag in ("--reserved", "-r"):
+                type_str = "critical"
+                idx += 1
+            else:
+                positionals.append(flag)
+                idx += 1
+
+        if not name and len(positionals) > 0:
+            name = positionals[0]
+        if not size_str and len(positionals) > 1:
+            size_str = positionals[1]
+        if len(positionals) > 2 and positionals[2].lower() in ("critical", "normal"):
+            type_str = positionals[2].lower()
+
+        if not name or not size_str:
+            return CommandResult(
+                success=False,
+                error="Parâmetros obrigatórios ausentes: --name e --size são necessários.",
+            )
+
+        if type_str not in ("critical", "normal"):
+            return CommandResult(
+                success=False,
+                error=f"Tipo de processo inválido: '{type_str}'. Opções válidas: critical, normal.",
+            )
+
+        proc_type = ProcessType.CRITICAL if type_str == "critical" else ProcessType.NORMAL
+        if proc_type == ProcessType.CRITICAL and not self.kernel.context.is_root():
+            return CommandResult(
+                success=False,
+                error="Acesso negado: apenas o usuário root / Modo Kernel pode criar processos críticos na Área Reservada.",
+            )
+
+        try:
+            size_bytes = parse_size_string(size_str)
+        except ValueError as e:
+            return CommandResult(success=False, error=str(e))
+
+        proc = self.kernel.process_manager.create_process(
+            name=name,
+            size_bytes=size_bytes,
+            process_type=proc_type,
+            owner=self.kernel.context.username,
+        )
+
+        try:
+            self.kernel.memory_manager.allocate_process_memory(proc)
+        except Exception as e:
+            proc.terminate()
+            if proc.name in self.kernel.process_manager.name_to_pid:
+                del self.kernel.process_manager.name_to_pid[proc.name]
+            if proc.pid in self.kernel.process_manager.processes:
+                del self.kernel.process_manager.processes[proc.pid]
+            return CommandResult(success=False, error=str(e))
+
+        if proc_type == ProcessType.CRITICAL:
+            seg = self.kernel.memory_manager.reserved_memory.get_segment_for_process(proc.name)
+            ram_range = f"[{seg.start_address:04d} - {seg.end_address:04d} KB]" if seg else "N/A"
+            lines = [
+                f"[create_process] Processo crítico criado com sucesso.",
+                f"PID            : {proc.pid}",
+                f"Nome           : {proc.name}",
+                f"Tipo           : CRITICAL (Área Reservada Contígua)",
+                f"Tamanho        : {proc.size_kb} KB ({proc.size_bytes} bytes)",
+                f"Intervalo RAM  : {ram_range}",
+                f"Estado         : {proc.state.value}",
+            ]
+        else:
+            pt = proc.page_table
+            lines = [
+                f"[create_process] Processo comum criado com sucesso.",
+                f"PID            : {proc.pid}",
+                f"Nome           : {proc.name}",
+                f"Tipo           : NORMAL (Memória Virtual Paginada)",
+                f"Tamanho        : {proc.size_kb} KB ({proc.size_bytes} bytes)",
+                f"Páginas Lógicas: {pt.total_pages} páginas ({self.kernel.memory_manager.page_size} bytes cada)",
+                f"Frag. Interna  : {pt.internal_fragmentation} bytes",
+                f"Estado         : {proc.state.value}",
+            ]
+        if hasattr(self.kernel, "audit_log") and self.kernel.audit_log:
+            self.kernel.audit_log.log_event(
+                event_type=AuditEventType.USER_MANAGEMENT,
+                username=self.kernel.context.username,
+                action="CREATE_PROCESS",
+                result="SUCCESS",
+                details={"pid": proc.pid, "name": proc.name, "type": proc.process_type.value},
+            )
+
+        return CommandResult(success=True, output="\n".join(lines), data={"process": proc.to_dict()})
+
+    def cmd_terminate_process(self, args: List[str]) -> CommandResult:
+        """Terminate a process and release its memory allocations."""
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: terminate_process --name \"<nome>\" ou terminate_process --pid <PID>",
+            )
+
+        identifier = None
+        idx = 0
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--name", "-n") and idx + 1 < len(args):
+                identifier = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--name="):
+                identifier = flag.split("=", 1)[1]
+                idx += 1
+            elif flag in ("--pid", "-p") and idx + 1 < len(args):
+                identifier = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--pid="):
+                identifier = flag.split("=", 1)[1]
+                idx += 1
+            else:
+                if identifier is None:
+                    identifier = flag
+                idx += 1
+
+        if not identifier:
+            return CommandResult(success=False, error="Nome ou PID do processo não especificado.")
+
+        target_proc = self.kernel.process_manager.get_process(identifier)
+
+        # Authorization check: critical processes require root/kernel mode
+        if target_proc.is_critical and not self.kernel.context.is_root():
+            return CommandResult(
+                success=False,
+                error="Acesso negado: apenas o usuário root / Modo Kernel pode encerrar processos críticos.",
+            )
+
+        # Authorization check: only owner or root can terminate process
+        if target_proc.owner != self.kernel.context.username and not self.kernel.context.is_root():
+            return CommandResult(
+                success=False,
+                error=f"Acesso negado: processo '{target_proc.name}' pertence ao usuário '{target_proc.owner}'.",
+            )
+
+        proc = self.kernel.process_manager.terminate_process(identifier)
+        self.kernel.memory_manager.free_process_memory(proc)
+
+        if hasattr(self.kernel, "audit_log") and self.kernel.audit_log:
+            self.kernel.audit_log.log_event(
+                event_type=AuditEventType.USER_MANAGEMENT,
+                username=self.kernel.context.username,
+                action="TERMINATE_PROCESS",
+                result="SUCCESS",
+                details={"pid": proc.pid, "name": proc.name, "type": proc.process_type.value},
+            )
+
+        lines = [
+            f"[terminate_process] Processo encerrado com sucesso.",
+            f"PID     : {proc.pid}",
+            f"Nome    : {proc.name}",
+            f"Tipo    : {proc.process_type.value}",
+            f"Memória : Recursos liberados e devolvidos ao sistema.",
+            f"Estado  : TERMINATED",
+        ]
+        return CommandResult(success=True, output="\n".join(lines), data={"process": proc.to_dict()})
+
+    def cmd_memory_status(self, args: List[str]) -> CommandResult:
+        """Display memory diagnostics for reserved, dynamic, and swap subsystems."""
+        reserved_only = "--reserved" in args or "-r" in args
+        status = self.kernel.memory_manager.get_status(reserved_only=reserved_only)
+        res = status["reserved"]
+
+        lines = [
+            "======================================================================",
+            "              DIAGNÓSTICO DA ÁREA DE MEMÓRIA RESERVADA",
+            "======================================================================",
+            f"Capacidade Total Reservada  : {_fmt_kb(res['total_capacity_kb'])} KB ({res['total_capacity_kb'] // 1024} MB)",
+            "Segmentos Atuais:",
+        ]
+        for seg in res["segments"]:
+            name = seg["process_name"] or "[BURACO LIVRE]"
+            status_tag = "OCUPADO" if seg["status"] == "ALLOCATED" else "LIVRE"
+            lines.append(
+                f"  [{seg['start_address']:04d} - {seg['end_address']:04d} KB] : {name} ({_fmt_kb(seg['size_kb'])} KB) - {status_tag}"
+            )
+        lines.extend([
+            "----------------------------------------------------------------------",
+            f"Espaço Livre Total          : {_fmt_kb(res['free_kb'])} KB",
+            f"Maior Bloco Livre Contíguo  : {_fmt_kb(res['max_contiguous_free_kb'])} KB",
+            f"Fragmentação Externa        : {_fmt_kb(res['external_fragmentation_kb'])} KB",
+            "======================================================================",
+        ])
+
+        if not reserved_only:
+            dyn = status["dynamic"]
+            swap = status["swap"]
+            stats = status["statistics"]
+            lines.extend([
+                "",
+                "======================================================================",
+                "               DIAGNÓSTICO DA ÁREA DE MEMÓRIA DINÂMICA",
+                "======================================================================",
+                f"Total de Molduras Físicas   : {dyn['total_frames']} molduras ({_fmt_kb(dyn['total_frames'] * dyn['page_size'] // 1024)} KB)",
+                f"Molduras Ocupadas           : {dyn['occupied_frames']} ({dyn['occupancy_percent']:.1f}%)",
+                f"Molduras Livres             : {dyn['free_frames']}",
+                f"Tamanho da Página/Moldura   : {_fmt_kb(dyn['page_size'])} bytes",
+                f"Algoritmo de Substituição   : {dyn['replacement_algorithm']}",
+                f"Total de Faltas de Página   : {stats['page_faults_total']} (Zero-Fill: {stats['page_faults_zero_fill']}, Imagem: {stats['page_faults_process_image']}, Swap: {stats['page_faults_swap']})",
+                "----------------------------------------------------------------------",
+                f"Slots Totais de Swap        : {swap['total_slots']} slots ({_fmt_kb(swap['total_slots'] * swap['slot_size'] // 1024)} KB)",
+                f"Slots de Swap em Uso        : {swap['used_slots']}",
+                f"Slots de Swap Livres        : {swap['free_slots']}",
+                f"Operações de Swap (Out/In)  : {stats['swap_outs_total']} / {stats['swap_ins_total']}",
+                f"Evicções (Limpa / Modificada): {stats['evictions_clean']} descartadas / {stats['evictions_dirty']} salvas no swap",
+                "======================================================================",
+            ])
+
+        return CommandResult(success=True, output="\n".join(lines), data=status)
+
+    def cmd_memory_compact(self, args: List[str]) -> CommandResult:
+        """Perform sliding compaction on the reserved memory area."""
+        if not self.kernel.context.is_root():
+            return CommandResult(
+                success=False,
+                error="Acesso negado: a compactação de memória requer privilégios de root / Modo Kernel.",
+            )
+
+        moved, consolidated_free = self.kernel.memory_manager.compact_reserved()
+        segments = self.kernel.memory_manager.reserved_memory.get_segments()
+
+        lines = [
+            "======================================================================",
+            "        ÁREA DE MEMÓRIA RESERVADA APÓS COMPACTAÇÃO DESLIZANTE",
+            "======================================================================",
+            "Segmentos Reorganizados:",
+        ]
+        for seg in segments:
+            name = seg.process_name or "[BLOCO LIVRE CONSOLIDADO]"
+            status_tag = "OCUPADO" if seg.is_allocated else "LIVRE"
+            lines.append(
+                f"  [{seg.start_address:04d} - {seg.end_address:04d} KB] : {name} ({_fmt_kb(seg.size)} KB) - {status_tag}"
+            )
+        lines.extend([
+            "----------------------------------------------------------------------",
+            f"Fragmentação Externa        : 0 KB (Capacidade máxima contígua: {_fmt_kb(consolidated_free)} KB)",
+            "======================================================================",
+        ])
+        return CommandResult(success=True, output="\n".join(lines), data={"moved": moved, "free_kb": consolidated_free})
+
+
+    def cmd_translate_address(self, args: List[str]) -> CommandResult:
+        """Translate logical page or byte address to physical frame/address."""
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: translate_address --process \"<nome>\" --page <numero_pagina> ou translate_address --pid <PID> --address <endereco>",
+            )
+
+        process_id = None
+        page = None
+        address = None
+
+        idx = 0
+        positionals = []
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--process", "-p") and idx + 1 < len(args):
+                process_id = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--process="):
+                process_id = flag.split("=", 1)[1]
+                idx += 1
+            elif flag == "--pid" and idx + 1 < len(args):
+                process_id = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--pid="):
+                process_id = flag.split("=", 1)[1]
+                idx += 1
+            elif flag == "--page" and idx + 1 < len(args):
+                page = int(args[idx + 1])
+                idx += 2
+            elif flag.startswith("--page="):
+                page = int(flag.split("=", 1)[1])
+                idx += 1
+            elif flag == "--address" and idx + 1 < len(args):
+                address = int(args[idx + 1])
+                idx += 2
+            elif flag.startswith("--address="):
+                address = int(flag.split("=", 1)[1])
+                idx += 1
+            else:
+                positionals.append(flag)
+                idx += 1
+
+        if process_id is None and len(positionals) > 0:
+            process_id = positionals[0]
+        if page is None and address is None and len(positionals) > 1:
+            try:
+                num = int(positionals[1])
+                if num >= 4096:
+                    address = num
+                else:
+                    page = num
+            except ValueError:
+                pass
+
+        if process_id is None or (page is None and address is None):
+            return CommandResult(
+                success=False,
+                error="Parâmetros insuficientes: informe --process/--pid e --page ou --address.",
+            )
+
+        proc = self.kernel.process_manager.get_process(process_id)
+
+        if address is not None:
+            try:
+                res = self.kernel.memory_manager.translate_address(proc, address)
+                lines = [
+                    "[TRADUÇÃO DE ENDEREÇO LÓGICO COMPLETO]",
+                    f"Processo         : {proc.name} (PID {proc.pid})",
+                    f"Endereço Lógico  : {res['logical_address']}",
+                    f"Página Lógica (p): {res['logical_page']}",
+                    f"Deslocamento (d) : {res['offset']}",
+                    f"Moldura Física (f): {res['frame_id']}",
+                    f"Endereço Físico  : {res['physical_address']}",
+                ]
+                return CommandResult(success=True, output="\n".join(lines), data=res)
+            except PageFaultException as e:
+                return CommandResult(
+                    success=True,
+                    output=(
+                        f"[FALTA DE PÁGINA DETECTADA (PAGE FAULT)]\n"
+                        f"Processo         : {proc.name} (PID {proc.pid})\n"
+                        f"Endereço Lógico  : {address}\n"
+                        f"Página Lógica (p): {address // self.kernel.memory_manager.page_size}\n"
+                        f"Estado na RAM    : AUSENTE (Origem: {e.page_origin})\n"
+                        f"Ação do SO       : Requer execução de instrução (execute_step) para carga."
+                    ),
+                    data={"page_fault": True, "pid": proc.pid, "logical_page": e.logical_page},
+                )
+        else:
+            try:
+                res = self.kernel.memory_manager.translate_page(proc, page)
+                lines = [
+                    "[TRADUÇÃO DE ENDEREÇO VIRTUAL]",
+                    f"Processo            : {proc.name} (PID {proc.pid})",
+                    f"Página Lógica       : {res['logical_page']}",
+                    f"Moldura Física      : {res['frame_id']}",
+                    f"Endereço Base Físico: {res['base_address']}",
+                    f"Intervalo Físico    : [{res['base_address']} - {res['end_address']} bytes]",
+                    f"Estado na RAM       : PRESENTE",
+                ]
+                return CommandResult(success=True, output="\n".join(lines), data=res)
+            except PageFaultException as e:
+                return CommandResult(
+                    success=True,
+                    output=(
+                        f"[FALTA DE PÁGINA (PAGE FAULT)]\n"
+                        f"Processo      : {proc.name} (PID {proc.pid})\n"
+                        f"Página Lógica : {page}\n"
+                        f"Estado na RAM : AUSENTE (Página não carregada em moldura física)\n"
+                        f"Origem Válida : {e.page_origin}\n"
+                        f"Ação do SO    : Será carregada sob demanda quando acessada por execute_step."
+                    ),
+                    data={"page_fault": True, "pid": proc.pid, "logical_page": page, "origin": e.page_origin},
+                )
+
+    def cmd_execute_step(self, args: List[str]) -> CommandResult:
+        """Simulate CPU instruction execution and memory access."""
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: execute_step --process \"<nome>\" --instruction \"<instrucao>\"",
+            )
+
+        process_id = None
+        instruction = None
+
+        idx = 0
+        positionals = []
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--process", "-p") and idx + 1 < len(args):
+                process_id = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--process="):
+                process_id = flag.split("=", 1)[1]
+                idx += 1
+            elif flag == "--pid" and idx + 1 < len(args):
+                process_id = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--pid="):
+                process_id = flag.split("=", 1)[1]
+                idx += 1
+            elif flag in ("--instruction", "-i") and idx + 1 < len(args):
+                instruction = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--instruction="):
+                instruction = flag.split("=", 1)[1]
+                idx += 1
+            else:
+                positionals.append(flag)
+                idx += 1
+
+        if process_id is None and len(positionals) > 0:
+            process_id = positionals[0]
+        if instruction is None and len(positionals) > 1:
+            instruction = " ".join(positionals[1:])
+
+        if not process_id or not instruction:
+            return CommandResult(
+                success=False,
+                error="Parâmetros insuficientes: --process e --instruction são obrigatórios.",
+            )
+
+        proc = self.kernel.process_manager.get_process(process_id)
+        res = self.kernel.memory_manager.execute_instruction(proc, instruction)
+
+        lines = [
+            "[EXECUÇÃO DE INSTRUÇÃO E ACESSO À MEMÓRIA]",
+            f"Processo       : {proc.name} (PID {proc.pid})",
+            f"Instrução      : {instruction}",
+            f"Tipo de Acesso : {'ESCRITA (dirty=True)' if res['is_write'] else 'LEITURA'}",
+            f"Página Alvo    : Página {res['logical_page']} -> Moldura {res['frame_id']}",
+            f"Falta de Página: {'SIM (Tratada e resolvida)' if res['page_fault'] else 'NÃO (Página já residente)'}",
+        ]
+        if res["page_fault"] and res["fault_details"]:
+            fd = res["fault_details"]
+            lines.append(f"  Origem Válida: {fd['page_origin']}")
+            if fd["victim"]:
+                v = fd["victim"]
+                action_desc = f"{v['action']} (dirty={v['dirty']})"
+                if v.get("swap_slot_id") is not None:
+                    action_desc += f" -> Gravada no Swap Slot {v['swap_slot_id']}"
+                lines.append(f"  Vítima Eleita: PID {v['pid']}, Página {v['logical_page']} (Moldura {v['frame_id']}) -> {action_desc}")
+            else:
+                lines.append("  Alocação     : Moldura livre disponível sem necessidade de substituição.")
+
+        return CommandResult(success=True, output="\n".join(lines), data=res)
+
+    def cmd_page_replacement(self, args: List[str]) -> CommandResult:
+        """Query or switch active page replacement policy."""
+        if not args:
+            return CommandResult(
+                success=True,
+                output=f"Algoritmo de substituição de páginas ativo: {self.kernel.memory_manager.algorithm.value}",
+            )
+
+        algo = None
+        idx = 0
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--algorithm", "--set", "-a") and idx + 1 < len(args):
+                algo = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--algorithm="):
+                algo = flag.split("=", 1)[1]
+                idx += 1
+            else:
+                algo = flag
+                idx += 1
+
+        try:
+            self.kernel.memory_manager.set_replacement_policy(algo)
+            return CommandResult(
+                success=True,
+                output=f"Algoritmo de substituição de páginas alterado para: {self.kernel.memory_manager.algorithm.value}",
+            )
+        except ValueError as e:
+            return CommandResult(success=False, error=str(e))
+
+    def cmd_page_table(self, args: List[str]) -> CommandResult:
+        """Display page table entries and internal fragmentation for a process."""
+        if not args:
+            return CommandResult(
+                success=False,
+                error="Sintaxe: page_table --process \"<nome>\" ou page_table --pid <PID>",
+            )
+
+        identifier = None
+        idx = 0
+        while idx < len(args):
+            flag = args[idx]
+            if flag in ("--process", "-p") and idx + 1 < len(args):
+                identifier = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--process="):
+                identifier = flag.split("=", 1)[1]
+                idx += 1
+            elif flag in ("--pid", "-pid") and idx + 1 < len(args):
+                identifier = args[idx + 1]
+                idx += 2
+            elif flag.startswith("--pid="):
+                identifier = flag.split("=", 1)[1]
+                idx += 1
+            else:
+                identifier = flag
+                idx += 1
+
+        proc = self.kernel.process_manager.get_process(identifier)
+        if not proc.page_table:
+            return CommandResult(
+                success=False,
+                error=f"Processo '{proc.name}' é do tipo {proc.process_type.value} e não utiliza tabela de páginas.",
+            )
+
+        pt = proc.page_table
+        lines = [
+            "======================================================================",
+            f"      TABELA DE PÁGINAS — PROCESSO '{proc.name}' (PID {proc.pid})",
+            "======================================================================",
+            f"{'Página':<8} | {'Moldura':<8} | {'Presente':<9} | {'Modificada':<11} | {'Referenciada':<13} | {'Origem':<20} | {'Swap Slot':<9}",
+            "-" * 88,
+        ]
+        for p_idx in sorted(pt.entries.keys()):
+            e = pt.entries[p_idx]
+            frame_str = str(e.frame_id) if e.frame_id is not None else "-"
+            swap_str = str(e.swap_slot_id) if e.swap_slot_id is not None else "-"
+            lines.append(
+                f"{e.logical_page:<8} | {frame_str:<8} | {str(e.present):<9} | {str(e.dirty):<11} | {str(e.referenced):<13} | {e.page_origin.value:<20} | {swap_str:<9}"
+            )
+        lines.extend([
+            "-" * 88,
+            f"Total de Páginas     : {pt.total_pages} páginas ({pt.total_pages * pt.page_size} bytes virtuais)",
+            f"Tamanho do Processo  : {proc.size_bytes} bytes ({proc.size_kb} KB)",
+            f"Fragmentação Interna : {pt.internal_fragmentation} bytes (na última página)",
+            "======================================================================",
+        ])
+        return CommandResult(success=True, output="\n".join(lines), data=pt.to_dict())
+
+    def cmd_memory_map(self, args: List[str]) -> CommandResult:
+        """Display visual unified physical and virtual memory map."""
+        res_segs = self.kernel.memory_manager.reserved_memory.get_segments()
+        dyn_frames = self.kernel.memory_manager.physical_memory.frames
+
+        lines = [
+            "======================================================================",
+            "                   MAPA GERAL DA MEMÓRIA FÍSICA SIMULADA",
+            "======================================================================",
+            "[ÁREA RESERVADA CONTÍGUA - 0 a 4095 KB]",
+        ]
+        for seg in res_segs:
+            pname = seg.process_name or "[LIVRE]"
+            lines.append(f"  [{seg.start_address:04d} - {seg.end_address:04d} KB] : {pname:<22} ({seg.size:>4} KB) [{seg.status.value}]")
+
+        lines.extend([
+            "",
+            "[ÁREA DINÂMICA PAGINADA - MOLDURAS FÍSICAS]",
+        ])
+        for frame in dyn_frames:
+            if frame.occupied:
+                desc = f"PID {frame.owner_pid} (Página {frame.logical_page})"
+                status_str = "OCUPADA"
+            else:
+                desc = "[LIVRE]"
+                status_str = "LIVRE"
+            lines.append(f"  Moldura {frame.frame_id:02d} [{frame.frame_id * 4096:06d} - {(frame.frame_id + 1) * 4096 - 1:06d} B] : {desc:<25} [{status_str}]")
+
+        lines.append("======================================================================")
+        return CommandResult(success=True, output="\n".join(lines))
+
+
     def cmd_help(self, args: List[str]) -> CommandResult:
         lines = [
             "======================================================================",
@@ -1159,6 +1768,17 @@ class CommandDispatcher:
             "  antivirus_scan [<caminho>]        : Executa varredura de integridade e assinaturas",
             "  integrity_check [<caminho>]       : Valida ou registra linha de base de integridade",
             "  audit_log [--limit <n>]           : Exibe a trilha de auditoria do sistema",
+            "",
+            "GERENCIAMENTO DE MEMÓRIA E PROCESSOS (ETAPA 4):",
+            "  create_process --name <n> --size <s> --type <t>: Cria processo com alocação contígua ou paginada",
+            "  terminate_process --name <n>                   : Encerra processo e libera recursos de memória",
+            "  memory_status [--reserved]                     : Exibe mapa de memória, fragmentação e molduras",
+            "  memory_compact [--reserved]                    : Executa compactação deslizante da área reservada",
+            "  translate_address --process <p> --page <n>     : Traduz página lógica para moldura física (MMU)",
+            "  execute_step --process <p> --instruction <i>   : Simula acesso de instrução à memória e Page Fault",
+            "  page_replacement --algorithm <alg>             : Seleciona algoritmo de reposição (lru, second_chance)",
+            "  page_table --process <p>                       : Exibe a tabela de páginas do processo",
+            "  memory_map                                     : Exibe o mapa unificado de memória física e virtual",
             "",
             "SISTEMA:",
             "  help                              : Exibe esta lista de ajuda",
