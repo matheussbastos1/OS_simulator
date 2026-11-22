@@ -9,6 +9,8 @@ from os_simulator.filesystem.service import FileSystemService
 from os_simulator.io.scheduler import DiskScheduler, SSTFScheduler
 from os_simulator.io.service import IOManager
 from os_simulator.io.ssd import SSDDevice
+from os_simulator.memory.service import MemoryManager
+from os_simulator.process.manager import ProcessManager
 from os_simulator.security.audit import AuditLog
 from os_simulator.security.auth import AuthenticationService
 from os_simulator.security.integrity import AntivirusScanner, BaselineCatalog, IntegrityChecker
@@ -35,6 +37,10 @@ class SimulationKernel:
         ssd_device: Optional[SSDDevice] = None,
         scheduler: Optional[DiskScheduler] = None,
         kernel_secret: Optional[bytes] = None,
+        process_manager: Optional[ProcessManager] = None,
+        memory_manager: Optional[MemoryManager] = None,
+        reserved_memory_kb: int = 4096,
+        dynamic_frames: int = 16,
     ):
         self.context = ExecutionContext()
         self.kernel_secret = kernel_secret or b"os_simulator_kernel_secret_key_32!!"
@@ -50,6 +56,18 @@ class SimulationKernel:
             audit_log=self.audit_log,
         )
         self.auth = auth_port or self.security_manager
+
+        # Process and Memory subsystems (Etapa 4)
+        self.process_manager = process_manager or ProcessManager()
+        self.memory_manager = memory_manager or MemoryManager(
+            reserved_capacity_kb=reserved_memory_kb,
+            base_kernel_size_kb=1024,
+            dynamic_frames=dynamic_frames,
+            page_size=block_size,
+            process_lookup=self.process_manager.get_process,
+        )
+        self.memory_manager.set_process_lookup(self.process_manager.get_process)
+        self.process_manager.kernel_process.segment_id = self.memory_manager.reserved_memory.base_kernel_segment.segment_id
 
         # 1. Initialize SSD simulation (available for SSD diagnostic and benchmark)
         self.ssd_device = ssd_device or SSDDevice(logical_capacity=16, block_size=block_size)

@@ -52,6 +52,44 @@ class ProcessType(str, Enum):
     NORMAL = "NORMAL"
 
 
+class ProcessState(str, Enum):
+    """Lifecycle states of a simulated process."""
+    READY = "READY"
+    RUNNING = "RUNNING"
+    WAITING = "WAITING"
+    TERMINATED = "TERMINATED"
+
+
+class SegmentStatus(str, Enum):
+    """Allocation status of a reserved memory segment."""
+    FREE = "FREE"
+    ALLOCATED = "ALLOCATED"
+
+
+class PageOrigin(str, Enum):
+    """Valid provenance/origin of a logical page on page fault resolution."""
+    PROCESS_IMAGE = "PROCESS_IMAGE"
+    ZERO_FILL_ON_DEMAND = "ZERO_FILL_ON_DEMAND"
+    SWAP_STORAGE = "SWAP_STORAGE"
+
+
+class ReplacementAlgorithm(str, Enum):
+    """Page replacement algorithm policies."""
+    LRU = "LRU"
+    SECOND_CHANCE = "SECOND_CHANCE"
+
+    @classmethod
+    def from_string(cls, value: str) -> "ReplacementAlgorithm":
+        """Parse string to replacement algorithm enum."""
+        norm = value.strip().upper().replace("-", "_").replace(" ", "_")
+        if norm in ("LRU", "LEAST_RECENTLY_USED"):
+            return cls.LRU
+        if norm in ("SECOND_CHANCE", "SEGUNDA_CHANCE", "CLOCK"):
+            return cls.SECOND_CHANCE
+        raise ValueError(f"Algoritmo de substituição inválido: '{value}'. Opções: LRU, SECOND_CHANCE.")
+
+
+
 class AuditEventType(str, Enum):
     """Types of security events recorded in the audit log."""
     ACCESS_GRANTED = "ACCESS_GRANTED"

@@ -103,7 +103,7 @@ cd "OS_simulator"
 pip install -r requirements.txt
 ```
 
-### 6.2. Execução do Shell Interativo (Etapas 1, 2 e 3 operacionais)
+### 6.2. Execução do Shell Interativo (Etapas 1, 2, 3 e 4 operacionais)
 ```powershell
 # Iniciar o simulador interativo via Python
 python -m os_simulator.cli
@@ -157,10 +157,14 @@ Kernel inicializado com sucesso. Digite 'help' para comandos.
 | `create_process` | `create_process --name "Kernel_DiskDriver" --size 512KB --type critical` | Processos e Área Reservada Contígua |
 | `create_process` | `create_process --name "App_Navegador" --size 10KB --type normal` | Processos e Área Dinâmica Paginada |
 | `terminate_process` | `terminate_process --name "Kernel_NetDriver"` | Processos e Memória |
-| `memory_status` | `memory_status --reserved` | Gerenciamento de Memória |
-| `memory_compact` | `memory_compact --reserved` | Gerenciamento de Memória |
-| `translate_address` | `translate_address --process App_Navegador --page 1` | Memória (MMU) |
-| `execute_step` | `execute_step --process App_Navegador --instruction "LOAD_DATA Página 2"` | Memória, Page Fault e Swap |
+| `memory_status` | `memory_status [--reserved]` | Diagnóstico de Memória Reservada, Dinâmica e Swap |
+| `memory_compact` | `memory_compact --reserved` | Desfragmentação Deslizante da Área Reservada |
+| `translate_address` | `translate_address --process App_Navegador --page 1` | Tradução de Endereço Lógico/Virtual via MMU |
+| `execute_step` | `execute_step --process App_Navegador --instruction "LOAD_DATA Página 2"` | Execução de Instrução, Page Fault e Swap |
+| `page_replacement` | `page_replacement --algorithm second_chance` | Seleção de Algoritmo de Reposição (LRU / Segunda Chance) |
+| `page_table` | `page_table --process App_Navegador` | Consulta de Tabela de Páginas e Fragmentação Interna |
+| `memory_map` | `memory_map` | Mapa Visual Unificado de Memória Física e Molduras |
+
 
 ---
 
