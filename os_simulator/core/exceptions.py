@@ -142,3 +142,67 @@ class CryptoKeyException(SecurityException):
     """Raised when an encryption key is invalid, missing, or improperly sized."""
     pass
 
+
+# Process & Execution Exceptions (Etapa 4)
+class ProcessException(OSSimulatorException):
+    """Base class for process lifecycle errors."""
+    pass
+
+
+class ProcessNotFoundException(ProcessException):
+    """Raised when a process PID or name cannot be located."""
+    pass
+
+
+class ProcessAlreadyExistsException(ProcessException):
+    """Raised when attempting to create a process with an existing name/PID."""
+    pass
+
+
+class InvalidProcessStateException(ProcessException):
+    """Raised when an operation is invalid for current process state."""
+    pass
+
+
+# Memory Management Exceptions (Etapa 4)
+class MemoryException(OSSimulatorException):
+    """Base class for memory subsystem errors."""
+    pass
+
+
+class OutOfMemoryException(MemoryException):
+    """Raised when memory capacity (reserved, dynamic, or swap) is exhausted."""
+    pass
+
+
+class MemoryFragmentationException(MemoryException):
+    """Raised when contiguous memory allocation fails due to external fragmentation."""
+    pass
+
+
+class PageFaultException(MemoryException):
+    """Raised by MMU when a logical page is not present in physical RAM."""
+
+    def __init__(self, pid: int, logical_page: int, page_origin: str = "ZERO_FILL_ON_DEMAND", message: Optional[str] = None):
+        msg = message or f"Falta de página (Page Fault): Processo {pid}, Página Lógica {logical_page} (Origem: {page_origin})"
+        super().__init__(msg, code="PAGE_FAULT")
+        self.pid = pid
+        self.logical_page = logical_page
+        self.page_origin = page_origin
+
+
+class InvalidAddressException(MemoryException):
+    """Raised when an address or logical page is out of bounds for the process."""
+    pass
+
+
+class SwapException(MemoryException):
+    """Base class for swap storage errors."""
+    pass
+
+
+class SwapFullException(SwapException):
+    """Raised when the simulated swap partition runs out of free slots."""
+    pass
+
+
