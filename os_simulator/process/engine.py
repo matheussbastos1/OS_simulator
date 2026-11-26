@@ -218,15 +218,43 @@ class ExecutionEngine:
             )
         return preempted
 
+    def _schedule_thread_arrival_if_needed(self, proc: Process, thread: SimulatedThread) -> None:
+        """Schedule THREAD_ARRIVAL for a future NEW thread if not already queued."""
+        already_scheduled = any(
+            ev.event_type == SimulationEventType.THREAD_ARRIVAL and ev.tid == thread.tid
+            for ev in self.event_manager.pending_events()
+        )
+        if not already_scheduled:
+            self.event_manager.schedule_at(
+                timestamp_ms=thread.arrival_time_ms,
+                event_type=SimulationEventType.THREAD_ARRIVAL,
+                pid=proc.pid,
+                tid=thread.tid,
+                payload={"process_name": proc.name, "thread_name": thread.name},
+            )
+
     def _admit_and_enqueue_now(
         self,
         proc: Process,
         timestamp_ms: int,
         reason: str = "Admissão do processo na fila de prontos",
+        align_arrival: bool = False,
     ) -> None:
-        """Transition a NEW process to READY and enqueue its READY threads."""
-        if ProcessState.normalize(proc.state) == ProcessState.NEW:
-            self.process_manager.admit_process(proc, timestamp_ms=timestamp_ms, reason=reason)
+        """Transition a NEW process to READY and admit/enqueue due threads."""
+        norm_proc = ProcessState.normalize(proc.state)
+        if norm_proc == ProcessState.TERMINATED:
+            return
+
+        if align_arrival and timestamp_ms > proc.arrival_time_ms:
+            proc.arrival_time_ms = timestamp_ms
+
+        if norm_proc == ProcessState.NEW:
+            self.process_manager.transition_process_state(
+                proc,
+                ProcessState.READY,
+                timestamp_ms=timestamp_ms,
+                reason=reason,
+            )
             self.metrics_collector.record_event(
                 timestamp_ms=timestamp_ms,
                 event_type="PROCESS_ADMITTED",
@@ -237,10 +265,33 @@ class ExecutionEngine:
                 details=reason,
             )
 
+        admitted_any_thread = False
         for thread in proc.threads.values():
             norm_state = ProcessState.normalize(thread.state)
-            if norm_state == ProcessState.READY:
+            if norm_state == ProcessState.NEW:
+                if thread.arrival_time_ms <= timestamp_ms:
+                    if align_arrival and timestamp_ms > thread.arrival_time_ms:
+                        thread.arrival_time_ms = timestamp_ms
+                    self.process_manager.transition_thread_state(
+                        thread,
+                        ProcessState.READY,
+                        timestamp_ms=timestamp_ms,
+                        reason=reason,
+                        sync_parent=False,
+                    )
+                    admitted_any_thread = True
+                    self._enqueue_ready_thread(thread, timestamp_ms=timestamp_ms)
+                else:
+                    self._schedule_thread_arrival_if_needed(proc, thread)
+            elif norm_state == ProcessState.READY:
                 self._enqueue_ready_thread(thread, timestamp_ms=timestamp_ms)
+
+        if norm_proc != ProcessState.NEW and admitted_any_thread:
+            self.process_manager.sync_process_state(
+                proc,
+                timestamp_ms=timestamp_ms,
+                reason=reason,
+            )
 
     def submit_process(
         self,
@@ -365,9 +416,16 @@ class ExecutionEngine:
                     pid=proc.pid,
                     payload={"name": proc.name},
                 )
+            for thread in proc.threads.values():
+                if (
+                    ProcessState.normalize(thread.state) == ProcessState.NEW
+                    and thread.arrival_time_ms > now_ms
+                    and not (thread.name == "main" and thread.arrival_time_ms == proc.arrival_time_ms)
+                ):
+                    self._schedule_thread_arrival_if_needed(proc, thread)
             return proc
 
-        self._admit_and_enqueue_now(proc, timestamp_ms=now_ms)
+        self._admit_and_enqueue_now(proc, timestamp_ms=now_ms, align_arrival=True)
         return proc
 
     def create_thread(
@@ -387,8 +445,9 @@ class ExecutionEngine:
         eff_arrival = now_ms if arrival_time_ms is None else arrival_time_ms
         _validate_non_negative_int(eff_arrival, "arrival_time_ms")
 
+        is_parent_new = ProcessState.normalize(proc.state) == ProcessState.NEW
         is_future = eff_arrival > now_ms
-        target_state = ProcessState.NEW if is_future else ProcessState.READY
+        target_state = ProcessState.NEW if (is_future or is_parent_new) else ProcessState.READY
 
         if workload_steps:
             # Validate steps before mutating ProcessManager state
@@ -415,7 +474,7 @@ class ExecutionEngine:
             io_profile=io_profile,
             memory_access_pattern=memory_access_pattern,
             workload_steps=workload_steps,
-            sync_parent=True,
+            sync_parent=not is_parent_new,
         )
 
         self.metrics_collector.record_event(
@@ -430,16 +489,15 @@ class ExecutionEngine:
             details=f"Thread '{thread.name}' criada em '{proc.name}' (burst={thread.cpu_burst_ms}ms, arrival={eff_arrival}ms).",
         )
 
-        if is_future:
-            self.event_manager.schedule_at(
-                timestamp_ms=eff_arrival,
-                event_type=SimulationEventType.THREAD_ARRIVAL,
-                pid=proc.pid,
-                tid=thread.tid,
-                payload={"process_name": proc.name, "thread_name": thread.name},
-            )
-        else:
+        if target_state == ProcessState.READY:
             self._enqueue_ready_thread(thread, timestamp_ms=now_ms)
+        elif is_future:
+            has_pending_proc_arrival = any(
+                ev.event_type == SimulationEventType.PROCESS_ARRIVAL and ev.pid == proc.pid
+                for ev in self.event_manager.pending_events()
+            )
+            if not is_parent_new or has_pending_proc_arrival:
+                self._schedule_thread_arrival_if_needed(proc, thread)
 
         return thread
 
@@ -1237,11 +1295,12 @@ class ExecutionEngine:
         if ev.event_type == SimulationEventType.PROCESS_ARRIVAL:
             if ev.pid is not None:
                 proc = self.process_manager.processes.get(ev.pid)
-                if proc is not None and ProcessState.normalize(proc.state) == ProcessState.NEW:
+                if proc is not None and ProcessState.normalize(proc.state) != ProcessState.TERMINATED:
                     self._admit_and_enqueue_now(
                         proc,
                         timestamp_ms=now_ms,
                         reason=f"Chegada programada do processo em t={now_ms}ms",
+                        align_arrival=True,
                     )
             return
 
@@ -1397,6 +1456,11 @@ class ExecutionEngine:
         # Pre-tick syscall check (handles trigger_cpu_ms == 0 or pending steps at current cpu_consumed_ms)
         explicit_mem_ran = self._process_due_syscalls(proc, running, now_ms=now_ms)
         if ProcessState.normalize(running.state) != ProcessState.RUNNING:
+            if (
+                target_event == SimulationEventType.PROCESS_TERMINATED
+                and ProcessState.normalize(proc.state) == ProcessState.TERMINATED
+            ):
+                target_hit = True
             return True, target_hit
 
         if running.remaining_burst_ms <= 0:
@@ -1430,11 +1494,12 @@ class ExecutionEngine:
             and running.remaining_burst_ms <= 0
         ):
             self._complete_running_thread(running, now_ms=after_ms)
-            if (
-                target_event == SimulationEventType.PROCESS_TERMINATED
-                and ProcessState.normalize(proc.state) == ProcessState.TERMINATED
-            ):
-                target_hit = True
+
+        if (
+            target_event == SimulationEventType.PROCESS_TERMINATED
+            and ProcessState.normalize(proc.state) == ProcessState.TERMINATED
+        ):
+            target_hit = True
 
         # Drain events at new clock.now_ms BEFORE checking quantum expiration
         if self._drain_due_events(after_ms, target_event=target_event):

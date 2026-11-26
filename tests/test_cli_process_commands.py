@@ -525,6 +525,73 @@ class TestCLIProcessCommands(unittest.TestCase):
             self.assertFalse(res.success, f"Esperava falha para comando inválido: {bad}")
             self.assertTrue(bool(res.error), f"Esperava mensagem de erro para: {bad}")
 
+    def test_regression_cli_no_admit_thread_exit_until_event_and_stage4_clock_metrics(self):
+        """Regression CLI tests: --no-admit + thread_create, EXIT until-event, and Stage 4 clock>0 arrival."""
+        # 1. create_process --no-admit -> thread_create -> process_admit -> sched_run
+        r_new = self.dispatcher.execute_line(
+            "create_process --name NoAdmitCLI --size 4KB --burst 4 --no-admit"
+        )
+        self.assertTrue(r_new.success, r_new.error)
+        r_tc = self.dispatcher.execute_line(
+            "thread_create --process NoAdmitCLI --name aux --burst 2"
+        )
+        self.assertTrue(r_tc.success, r_tc.error)
+        self.assertEqual(r_tc.data["thread"]["state"], "NEW")
+        self.assertEqual(self.kernel.process_manager.get_process("NoAdmitCLI").state, ProcessState.NEW)
+
+        r_admit = self.dispatcher.execute_line("process_admit --process NoAdmitCLI")
+        self.assertTrue(r_admit.success, r_admit.error)
+        self.assertEqual(r_admit.data["state"], "READY")
+
+        r_run1 = self.dispatcher.execute_line("sched_run")
+        self.assertTrue(r_run1.success, r_run1.error)
+        self.assertEqual(self.kernel.process_manager.get_process("NoAdmitCLI").state, ProcessState.TERMINATED)
+
+        # 2. Unflagged Stage 4 create_process at clock > 0 inherits clock.now_ms for arrival_time_ms
+        self.assertTrue(self.dispatcher.execute_line("sim_reset").success)
+        self.assertTrue(self.dispatcher.execute_line("create_process --name Runner --size 4KB --burst 5").success)
+        self.assertTrue(self.dispatcher.execute_line("sched_run").success)
+        self.assertEqual(self.kernel.clock.now_ms, 5)
+
+        r_s4 = self.dispatcher.execute_line("create_process --name Stage4Proc --size 4KB")
+        self.assertTrue(r_s4.success, r_s4.error)
+        self.assertEqual(self.kernel.process_manager.get_process("Stage4Proc").arrival_time_ms, 5)
+
+        r_s4_t = self.dispatcher.execute_line("thread_create --process Stage4Proc --name t1 --burst 3")
+        self.assertTrue(r_s4_t.success, r_s4_t.error)
+        r_run2 = self.dispatcher.execute_line("sched_run")
+        self.assertTrue(r_run2.success, r_run2.error)
+
+        s4_pm = next(
+            pm for pm in r_run2.data["metrics"]["process_metrics"] if pm["name"] == "Stage4Proc"
+        )
+        self.assertEqual(s4_pm["arrival_time_ms"], 5)
+        self.assertEqual(s4_pm["start_time_ms"], 5)
+        self.assertEqual(s4_pm["finish_time_ms"], 8)
+        self.assertEqual(s4_pm["cpu_time_ms"], 3)
+        self.assertEqual(s4_pm["waiting_time_ms"], 0)
+        self.assertEqual(s4_pm["blocked_time_ms"], 0)
+        self.assertEqual(s4_pm["turnaround_time_ms"], 3)
+        self.assertEqual(s4_pm["response_time_ms"], 0)
+
+        # 3. sched_run --until-event PROCESS_TERMINATED stops at exact EXIT syscall tick
+        self.assertTrue(self.dispatcher.execute_line("sim_reset").success)
+        self.assertTrue(
+            self.dispatcher.execute_line("create_process --name ExitCLI --size 4KB --priority 1 --burst 5").success
+        )
+        self.assertTrue(
+            self.dispatcher.execute_line("create_process --name OtherCLI --size 4KB --priority 3 --burst 5").success
+        )
+        self.assertTrue(
+            self.dispatcher.execute_line("process_syscall --process ExitCLI --type exit --at-cpu 1").success
+        )
+        r_ev = self.dispatcher.execute_line("sched_run --until-event PROCESS_TERMINATED")
+        self.assertTrue(r_ev.success, r_ev.error)
+        self.assertEqual(r_ev.data["stop_reason"], "TARGET_EVENT_REACHED")
+        self.assertEqual(self.kernel.clock.now_ms, 1)
+        self.assertEqual(self.kernel.process_manager.get_process("ExitCLI").state, ProcessState.TERMINATED)
+        self.assertEqual(self.kernel.process_manager.get_process("OtherCLI").state, ProcessState.READY)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1225,6 +1225,7 @@ class CommandDispatcher:
                 size_bytes=size_bytes,
                 process_type=proc_type,
                 owner=self.kernel.context.username,
+                arrival_time_ms=self.kernel.clock.now_ms,
             )
 
             try:

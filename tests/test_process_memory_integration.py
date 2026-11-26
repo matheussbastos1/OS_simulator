@@ -649,6 +649,191 @@ class TestStage5ExecutionEngineScenarios(unittest.TestCase):
         self.assertEqual(q_run["stop_reason"], "TARGET_EVENT_REACHED")
         self.assertEqual(kernel.clock.now_ms, 3)
 
+    def test_regression_run_until_event_process_terminated_on_exit_syscall(self):
+        """Regression: run(until_event=PROCESS_TERMINATED) stops at exact EXIT syscall tick."""
+        kernel = SimulationKernel(quantum_ms=4)
+        engine = kernel.execution_engine
+
+        # Pre-tick EXIT at trigger_cpu_ms=0 -> must stop at t=0 before Other1 runs
+        p_exit_pre = engine.submit_process(
+            "ExitPre",
+            size_bytes=4096,
+            priority=1,
+            cpu_burst_ms=5,
+            workload_steps=[WorkloadStep(0, SyscallType.EXIT)],
+        )
+        p_other1 = engine.submit_process("Other1", size_bytes=4096, priority=3, cpu_burst_ms=5)
+
+        res_pre = engine.run(until_event=SimulationEventType.PROCESS_TERMINATED)
+        self.assertEqual(res_pre["stop_reason"], "TARGET_EVENT_REACHED")
+        self.assertEqual(kernel.clock.now_ms, 0)
+        self.assertEqual(p_exit_pre.state, ProcessState.TERMINATED)
+        self.assertEqual(p_other1.state, ProcessState.READY)
+        self.assertEqual(p_other1.cpu_consumed_ms, 0)
+
+        # Post-tick EXIT at trigger_cpu_ms=1 -> must stop at t=1 before Other2 runs
+        engine.reset()
+        p_exit_post = engine.submit_process(
+            "ExitPost",
+            size_bytes=4096,
+            priority=1,
+            cpu_burst_ms=5,
+            workload_steps=[WorkloadStep(1, SyscallType.EXIT)],
+        )
+        p_other2 = engine.submit_process("Other2", size_bytes=4096, priority=3, cpu_burst_ms=5)
+
+        res_post = engine.run(until_event=SimulationEventType.PROCESS_TERMINATED)
+        self.assertEqual(res_post["stop_reason"], "TARGET_EVENT_REACHED")
+        self.assertEqual(kernel.clock.now_ms, 1)
+        self.assertEqual(p_exit_post.state, ProcessState.TERMINATED)
+        self.assertEqual(p_other2.state, ProcessState.READY)
+        self.assertEqual(p_other2.cpu_consumed_ms, 0)
+
+        # until_process also stops at exact EXIT tick
+        engine.reset()
+        p_u = engine.submit_process(
+            "ExitUntilProc",
+            size_bytes=4096,
+            priority=1,
+            cpu_burst_ms=5,
+            workload_steps=[WorkloadStep(0, SyscallType.EXIT)],
+        )
+        p_o3 = engine.submit_process("Other3", size_bytes=4096, priority=3, cpu_burst_ms=5)
+        res_u = engine.run(until_process="ExitUntilProc")
+        self.assertEqual(res_u["stop_reason"], "TARGET_PROCESS_TERMINATED")
+        self.assertEqual(kernel.clock.now_ms, 0)
+        self.assertEqual(p_u.state, ProcessState.TERMINATED)
+        self.assertEqual(p_o3.cpu_consumed_ms, 0)
+
+    def test_regression_create_thread_on_new_process_defers_admission(self):
+        """Regression: create_thread on NEW (--no-admit) process keeps thread and parent NEW until admit."""
+        kernel = SimulationKernel(quantum_ms=4)
+        engine = kernel.execution_engine
+
+        p_new = engine.submit_process("NoAdmitP", size_bytes=4096, cpu_burst_ms=4, admit_immediately=False)
+        t_aux = engine.create_thread("NoAdmitP", "aux", cpu_burst_ms=2)
+        t_fut = engine.create_thread("NoAdmitP", "fut", cpu_burst_ms=2, arrival_time_ms=8)
+
+        self.assertEqual(p_new.state, ProcessState.NEW)
+        self.assertEqual(kernel.process_manager.get_thread_by_name(p_new, "main").state, ProcessState.NEW)
+        self.assertEqual(t_aux.state, ProcessState.NEW)
+        self.assertEqual(t_fut.state, ProcessState.NEW)
+        self.assertTrue(kernel.cpu_scheduler.is_ready_empty())
+        self.assertEqual(len(kernel.event_manager), 0)
+
+        # Advance clock to t=5 via an unrelated process; NoAdmitP and its threads remain NEW
+        engine.submit_process("Warmup", size_bytes=4096, cpu_burst_ms=5)
+        engine.run()
+        self.assertEqual(kernel.clock.now_ms, 5)
+        self.assertEqual(p_new.state, ProcessState.NEW)
+        self.assertEqual(t_aux.state, ProcessState.NEW)
+        self.assertEqual(t_fut.state, ProcessState.NEW)
+
+        # Admit at t=5 -> main and aux become READY (arrival aligned to 5); fut stays NEW until t=8
+        engine.admit_process("NoAdmitP")
+        self.assertEqual(p_new.state, ProcessState.READY)
+        self.assertEqual(p_new.arrival_time_ms, 5)
+        t_main = kernel.process_manager.get_thread_by_name(p_new, "main")
+        self.assertEqual(t_main.state, ProcessState.READY)
+        self.assertEqual(t_main.arrival_time_ms, 5)
+        self.assertEqual(t_aux.state, ProcessState.READY)
+        self.assertEqual(t_aux.arrival_time_ms, 5)
+        self.assertEqual(t_fut.state, ProcessState.NEW)
+
+        engine.run()
+        self.assertEqual(p_new.state, ProcessState.TERMINATED)
+        self.assertEqual(t_main.state, ProcessState.TERMINATED)
+        self.assertEqual(t_aux.state, ProcessState.TERMINATED)
+        self.assertEqual(t_fut.state, ProcessState.TERMINATED)
+
+        gm = engine.get_metrics()
+        p_met = next(pm for pm in gm.process_metrics if pm.name == "NoAdmitP")
+        for tm in p_met.thread_metrics:
+            self.assertEqual(
+                tm.turnaround_time_ms,
+                tm.cpu_time_ms + tm.waiting_time_ms + tm.blocked_time_ms,
+            )
+
+    def test_regression_process_arrival_admits_main_after_early_child_thread(self):
+        """Regression: PROCESS_ARRIVAL admits main thread even if an early child thread already ran."""
+        kernel = SimulationKernel(quantum_ms=4)
+        engine = kernel.execution_engine
+
+        p_fut = engine.submit_process("FutP", size_bytes=4096, cpu_burst_ms=4, arrival_time_ms=10)
+        t_early = engine.create_thread("FutP", "early_worker", cpu_burst_ms=8, arrival_time_ms=5)
+
+        engine.run()
+        t_main = kernel.process_manager.get_thread_by_name(p_fut, "main")
+        self.assertEqual(p_fut.state, ProcessState.TERMINATED)
+        self.assertEqual(t_early.state, ProcessState.TERMINATED)
+        self.assertEqual(t_early.cpu_consumed_ms, 8)
+        self.assertEqual(t_main.state, ProcessState.TERMINATED)
+        self.assertEqual(t_main.cpu_consumed_ms, 4)
+
+        # Also verify case where early child thread finishes before parent arrival_time_ms
+        engine.reset()
+        p_fut2 = engine.submit_process("FutP2", size_bytes=4096, cpu_burst_ms=3, arrival_time_ms=10)
+        t_early2 = engine.create_thread("FutP2", "short_early", cpu_burst_ms=2, arrival_time_ms=5)
+        engine.run()
+        t_main2 = kernel.process_manager.get_thread_by_name(p_fut2, "main")
+        self.assertEqual(p_fut2.state, ProcessState.TERMINATED)
+        self.assertEqual(t_early2.state, ProcessState.TERMINATED)
+        self.assertEqual(t_main2.state, ProcessState.TERMINATED)
+        self.assertEqual(t_main2.cpu_consumed_ms, 3)
+        self.assertEqual(p_fut2.finish_time_ms, 13)
+
+    def test_regression_late_admit_and_ready_thread_arrival_metrics_invariant(self):
+        """Regression: late admit_process and create_thread at clock>0 keep TAT == CPU + WT + BLK."""
+        kernel = SimulationKernel(quantum_ms=4)
+        engine = kernel.execution_engine
+
+        p_late = engine.submit_process(
+            "LateP",
+            size_bytes=4096,
+            cpu_burst_ms=4,
+            arrival_time_ms=0,
+            admit_immediately=False,
+        )
+        p_lead = engine.submit_process("Lead", size_bytes=4096, cpu_burst_ms=5)
+        engine.run(until_process="Lead")
+        self.assertEqual(kernel.clock.now_ms, 5)
+        self.assertEqual(p_lead.state, ProcessState.TERMINATED)
+
+        # Late admission at t=5 aligns arrival_time_ms to 5
+        engine.admit_process("LateP")
+        self.assertEqual(p_late.arrival_time_ms, 5)
+        t_main = kernel.process_manager.get_thread_by_name(p_late, "main")
+        self.assertEqual(t_main.arrival_time_ms, 5)
+
+        # Creating a thread on an already-READY process at clock=5 defaults arrival_time_ms to 5
+        p_ready = engine.submit_process("AlreadyReady", size_bytes=4096, cpu_burst_ms=0)
+        t_dyn = engine.create_thread("AlreadyReady", "dyn", cpu_burst_ms=2)
+        self.assertEqual(t_dyn.arrival_time_ms, 5)
+
+        engine.run()
+        gm = engine.get_metrics()
+        late_pm = next(pm for pm in gm.process_metrics if pm.name == "LateP")
+        self.assertEqual(late_pm.arrival_time_ms, 5)
+        self.assertEqual(late_pm.finish_time_ms, 9)
+        self.assertEqual(
+            late_pm.turnaround_time_ms,
+            late_pm.cpu_time_ms + late_pm.waiting_time_ms + late_pm.blocked_time_ms,
+        )
+        for tm in late_pm.thread_metrics:
+            self.assertEqual(
+                tm.turnaround_time_ms,
+                tm.cpu_time_ms + tm.waiting_time_ms + tm.blocked_time_ms,
+            )
+
+        dyn_pm = next(pm for pm in gm.process_metrics if pm.name == "AlreadyReady")
+        self.assertEqual(dyn_pm.thread_metrics[0].arrival_time_ms, 5)
+        self.assertEqual(
+            dyn_pm.thread_metrics[0].turnaround_time_ms,
+            dyn_pm.thread_metrics[0].cpu_time_ms
+            + dyn_pm.thread_metrics[0].waiting_time_ms
+            + dyn_pm.thread_metrics[0].blocked_time_ms,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
