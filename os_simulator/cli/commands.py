@@ -4,6 +4,15 @@ import re
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
+from os_simulator.cli.process_commands import (
+    CommandResult,
+    Stage5ProcessCommands,
+    build_io_profile,
+    describe_io_profile,
+    parse_cli_args,
+    parse_int_arg,
+    parse_pages_pattern,
+)
 from os_simulator.core.context import ExecutionContext
 from os_simulator.core.exceptions import OSSimulatorException, PageFaultException, PermissionDeniedException
 from os_simulator.core.simulation_kernel import SimulationKernel
@@ -42,30 +51,12 @@ def _fmt_kb(val: int) -> str:
     return f"{val:,}".replace(",", ".")
 
 
-class CommandResult:
-    """Encapsulates the execution result of a CLI command."""
-
-    def __init__(
-        self,
-        success: bool,
-        output: str = "",
-        error: Optional[str] = None,
-        data: Optional[Dict[str, Any]] = None,
-    ):
-        self.success = success
-        self.output = output
-        self.error = error
-        self.data = data or {}
-
-    def __str__(self) -> str:
-        return self.output if self.success else f"Erro: {self.error}"
-
-
 class CommandDispatcher:
     """Dispatches CLI commands to the appropriate kernel handlers."""
 
     def __init__(self, kernel: SimulationKernel):
         self.kernel = kernel
+        self.process_commands = Stage5ProcessCommands(self.kernel)
 
     def execute_line(self, line: str) -> CommandResult:
         """Parse and execute a single CLI input line."""
@@ -136,6 +127,27 @@ class CommandDispatcher:
             "page_replacement": self.cmd_page_replacement,
             "page_table": self.cmd_page_table,
             "memory_map": self.cmd_memory_map,
+            # Process Scheduling, Threads, Syscalls, Concurrency & Metrics (Etapa 5)
+            "ps": self.process_commands.cmd_ps,
+            "process_status": self.process_commands.cmd_ps,
+            "process_admit": self.process_commands.cmd_process_admit,
+            "thread_create": self.process_commands.cmd_thread_create,
+            "thread_status": self.process_commands.cmd_thread_status,
+            "sched_config": self.process_commands.cmd_sched_config,
+            "sched_status": self.process_commands.cmd_sched_status,
+            "sched_step": self.process_commands.cmd_sched_step,
+            "sched_run": self.process_commands.cmd_sched_run,
+            "process_syscall": self.process_commands.cmd_process_syscall,
+            "mutex_create": self.process_commands.cmd_mutex_create,
+            "mutex_lock": self.process_commands.cmd_mutex_lock,
+            "mutex_unlock": self.process_commands.cmd_mutex_unlock,
+            "mutex_status": self.process_commands.cmd_mutex_status,
+            "mutex_demo": self.process_commands.cmd_mutex_demo,
+            "deadlock_check": self.process_commands.cmd_deadlock_check,
+            "memory_frames": self.process_commands.cmd_memory_frames,
+            "sim_metrics": self.process_commands.cmd_sim_metrics,
+            "sim_timeline": self.process_commands.cmd_sim_timeline,
+            "sim_reset": self.process_commands.cmd_sim_reset,
             # System Help
             "help": self.cmd_help,
         }
@@ -1128,52 +1140,46 @@ class CommandDispatcher:
     # =========================================================================
 
     def cmd_create_process(self, args: List[str]) -> CommandResult:
-        """Create a new process with either contiguous (critical) or paged (normal) memory."""
+        """Create a new process with contiguous/paged memory and optional Stage 5 execution parameters."""
         if not args:
             return CommandResult(
                 success=False,
                 error="Sintaxe: create_process --name \"<nome>\" --size <tamanho> --type <critical|normal>",
             )
 
-        name = None
-        size_str = None
-        type_str = "normal"
+        try:
+            values, flags, positionals = parse_cli_args(
+                args,
+                value_flags={
+                    "--name",
+                    "--size",
+                    "--type",
+                    "--priority",
+                    "--burst",
+                    "--arrival",
+                    "--io-profile",
+                    "--io-every",
+                    "--io-duration",
+                    "--seed",
+                    "--pages",
+                },
+                bool_flags={"--reserved", "--no-admit"},
+                aliases={"-n": "--name", "-s": "--size", "-t": "--type", "-r": "--reserved"},
+            )
+        except ValueError as e:
+            return CommandResult(success=False, error=str(e))
 
-        idx = 0
-        positionals = []
-        while idx < len(args):
-            flag = args[idx]
-            if flag in ("--name", "-n") and idx + 1 < len(args):
-                name = args[idx + 1]
-                idx += 2
-            elif flag.startswith("--name="):
-                name = flag.split("=", 1)[1]
-                idx += 1
-            elif flag in ("--size", "-s") and idx + 1 < len(args):
-                size_str = args[idx + 1]
-                idx += 2
-            elif flag.startswith("--size="):
-                size_str = flag.split("=", 1)[1]
-                idx += 1
-            elif flag in ("--type", "-t") and idx + 1 < len(args):
-                type_str = args[idx + 1].lower()
-                idx += 2
-            elif flag.startswith("--type="):
-                type_str = flag.split("=", 1)[1].lower()
-                idx += 1
-            elif flag in ("--reserved", "-r"):
-                type_str = "critical"
-                idx += 1
-            else:
-                positionals.append(flag)
-                idx += 1
+        name = values.get("--name") or (positionals[0] if len(positionals) > 0 else None)
+        size_str = values.get("--size") or (positionals[1] if len(positionals) > 1 else None)
 
-        if not name and len(positionals) > 0:
-            name = positionals[0]
-        if not size_str and len(positionals) > 1:
-            size_str = positionals[1]
-        if len(positionals) > 2 and positionals[2].lower() in ("critical", "normal"):
+        if "--reserved" in flags:
+            type_str = "critical"
+        elif "--type" in values:
+            type_str = values["--type"].lower()
+        elif len(positionals) > 2 and positionals[2].lower() in ("critical", "normal"):
             type_str = positionals[2].lower()
+        else:
+            type_str = "normal"
 
         if not name or not size_str:
             return CommandResult(
@@ -1199,22 +1205,95 @@ class CommandDispatcher:
         except ValueError as e:
             return CommandResult(success=False, error=str(e))
 
-        proc = self.kernel.process_manager.create_process(
-            name=name,
-            size_bytes=size_bytes,
-            process_type=proc_type,
-            owner=self.kernel.context.username,
+        stage5_keys = (
+            "--priority",
+            "--burst",
+            "--arrival",
+            "--io-profile",
+            "--io-every",
+            "--io-duration",
+            "--seed",
+            "--pages",
         )
+        has_stage5_flags = any(k in values for k in stage5_keys) or ("--no-admit" in flags)
 
-        try:
-            self.kernel.memory_manager.allocate_process_memory(proc)
-        except Exception as e:
-            proc.terminate()
-            if proc.name in self.kernel.process_manager.name_to_pid:
-                del self.kernel.process_manager.name_to_pid[proc.name]
-            if proc.pid in self.kernel.process_manager.processes:
-                del self.kernel.process_manager.processes[proc.pid]
-            return CommandResult(success=False, error=str(e))
+        io_profile_obj = None
+        pages_pattern = None
+        if not has_stage5_flags:
+            proc = self.kernel.process_manager.create_process(
+                name=name,
+                size_bytes=size_bytes,
+                process_type=proc_type,
+                owner=self.kernel.context.username,
+            )
+
+            try:
+                self.kernel.memory_manager.allocate_process_memory(proc)
+            except Exception as e:
+                proc.terminate()
+                if proc.name in self.kernel.process_manager.name_to_pid:
+                    del self.kernel.process_manager.name_to_pid[proc.name]
+                if proc.pid in self.kernel.process_manager.processes:
+                    del self.kernel.process_manager.processes[proc.pid]
+                return CommandResult(success=False, error=str(e))
+        else:
+            try:
+                priority = (
+                    parse_int_arg(values["--priority"], "Prioridade", min_val=1)
+                    if "--priority" in values
+                    else 3
+                )
+                burst = (
+                    parse_int_arg(values["--burst"], "Burst de CPU", min_val=0)
+                    if "--burst" in values
+                    else 0
+                )
+                arrival = (
+                    parse_int_arg(values["--arrival"], "Tempo de chegada", min_val=0)
+                    if "--arrival" in values
+                    else None
+                )
+                io_every = (
+                    parse_int_arg(values["--io-every"], "Intervalo de E/S (--io-every)", min_val=1)
+                    if "--io-every" in values
+                    else None
+                )
+                io_duration = (
+                    parse_int_arg(values["--io-duration"], "Duração de E/S (--io-duration)", min_val=1)
+                    if "--io-duration" in values
+                    else None
+                )
+                seed_val = (
+                    parse_int_arg(values["--seed"], "Seed")
+                    if "--seed" in values
+                    else None
+                )
+                pages_pattern = (
+                    parse_pages_pattern(values["--pages"])
+                    if "--pages" in values
+                    else None
+                )
+                io_profile_obj = build_io_profile(
+                    io_profile_str=values.get("--io-profile"),
+                    io_every=io_every,
+                    io_duration=io_duration,
+                    seed_val=seed_val,
+                    default_seed=self.kernel.execution_engine.default_seed,
+                )
+                proc = self.kernel.execution_engine.submit_process(
+                    name=name,
+                    size_bytes=size_bytes,
+                    process_type=proc_type,
+                    owner=self.kernel.context.username,
+                    priority=priority,
+                    cpu_burst_ms=burst,
+                    arrival_time_ms=arrival,
+                    io_profile=io_profile_obj,
+                    memory_access_pattern=pages_pattern,
+                    admit_immediately="--no-admit" not in flags,
+                )
+            except (OSSimulatorException, ValueError) as e:
+                return CommandResult(success=False, error=str(e))
 
         if proc_type == ProcessType.CRITICAL:
             seg = self.kernel.memory_manager.reserved_memory.get_segment_for_process(proc.name)
@@ -1240,6 +1319,18 @@ class CommandDispatcher:
                 f"Frag. Interna  : {pt.internal_fragmentation} bytes",
                 f"Estado         : {proc.state.value}",
             ]
+
+        if has_stage5_flags:
+            lines.extend([
+                f"Prioridade     : {proc.priority}",
+                f"Burst de CPU   : {proc.cpu_burst_ms} ms",
+                f"Chegada        : {proc.arrival_time_ms} ms",
+                f"Perfil de E/S  : {describe_io_profile(io_profile_obj)}",
+            ])
+            if pages_pattern is not None:
+                pages_desc = ", ".join(f"{p}{':W' if w else ''}" for p, w in pages_pattern)
+                lines.append(f"Padrão Páginas : [{pages_desc}]")
+
         if hasattr(self.kernel, "audit_log") and self.kernel.audit_log:
             self.kernel.audit_log.log_event(
                 event_type=AuditEventType.USER_MANAGEMENT,
@@ -1252,33 +1343,26 @@ class CommandDispatcher:
         return CommandResult(success=True, output="\n".join(lines), data={"process": proc.to_dict()})
 
     def cmd_terminate_process(self, args: List[str]) -> CommandResult:
-        """Terminate a process and release its memory allocations."""
+        """Terminate a process and release its scheduler, mutex, event, and memory allocations."""
         if not args:
             return CommandResult(
                 success=False,
                 error="Sintaxe: terminate_process --name \"<nome>\" ou terminate_process --pid <PID>",
             )
 
-        identifier = None
-        idx = 0
-        while idx < len(args):
-            flag = args[idx]
-            if flag in ("--name", "-n") and idx + 1 < len(args):
-                identifier = args[idx + 1]
-                idx += 2
-            elif flag.startswith("--name="):
-                identifier = flag.split("=", 1)[1]
-                idx += 1
-            elif flag in ("--pid", "-p") and idx + 1 < len(args):
-                identifier = args[idx + 1]
-                idx += 2
-            elif flag.startswith("--pid="):
-                identifier = flag.split("=", 1)[1]
-                idx += 1
-            else:
-                if identifier is None:
-                    identifier = flag
-                idx += 1
+        try:
+            values, _, positionals = parse_cli_args(
+                args,
+                value_flags={"--name", "--pid"},
+                aliases={"-n": "--name", "-p": "--pid"},
+            )
+            identifier = (
+                values.get("--name")
+                or values.get("--pid")
+                or (positionals[0] if positionals else None)
+            )
+        except ValueError as e:
+            return CommandResult(success=False, error=str(e))
 
         if not identifier:
             return CommandResult(success=False, error="Nome ou PID do processo não especificado.")
@@ -1299,17 +1383,7 @@ class CommandDispatcher:
                 error=f"Acesso negado: processo '{target_proc.name}' pertence ao usuário '{target_proc.owner}'.",
             )
 
-        proc = self.kernel.process_manager.terminate_process(identifier)
-        self.kernel.memory_manager.free_process_memory(proc)
-
-        if hasattr(self.kernel, "audit_log") and self.kernel.audit_log:
-            self.kernel.audit_log.log_event(
-                event_type=AuditEventType.USER_MANAGEMENT,
-                username=self.kernel.context.username,
-                action="TERMINATE_PROCESS",
-                result="SUCCESS",
-                details={"pid": proc.pid, "name": proc.name, "type": proc.process_type.value},
-            )
+        proc = self.kernel.execution_engine.terminate_process(identifier)
 
         lines = [
             f"[terminate_process] Processo encerrado com sucesso.",
@@ -1779,6 +1853,28 @@ class CommandDispatcher:
             "  page_replacement --algorithm <alg>             : Seleciona algoritmo de reposição (lru, second_chance)",
             "  page_table --process <p>                       : Exibe a tabela de páginas do processo",
             "  memory_map                                     : Exibe o mapa unificado de memória física e virtual",
+            "",
+            "PROCESSOS, THREADS, ESCALONAMENTO E CONCORRÊNCIA (ETAPA 5):",
+            "  create_process ... [--priority <p>] [--burst <ms>] [--arrival <ms>] [--io-profile <perf>] [--no-admit]",
+            "  ps / process_status [--all]                    : Lista processos, threads, estados e bloqueios",
+            "  process_admit --process <p>                    : Admite processo em NEW para READY",
+            "  thread_create --process <p> --name <t> [...]   : Cria thread escalonável em processo existente",
+            "  thread_status [--process <p>]                  : Exibe status detalhado das threads simuladas",
+            "  sched_config [--algorithm <alg>] [--quantum <ms>] [--seed <n>]: Configura ou exibe escalonador",
+            "  sched_status                                   : Exibe thread RUNNING, filas por prioridade e bloqueios",
+            "  sched_step [--ms <n>]                          : Avança simulação por N milissegundos lógicos",
+            "  sched_run [--max-ms <n>] [--until-process <p>] [--until-event <ev>]: Executa simulação completa",
+            "  process_syscall --process <p> --type <t> [...] : Agenda ou executa syscall imediata (--now)",
+            "  mutex_create [--name] <nome>                   : Cria mutex para sincronização de threads",
+            "  mutex_lock --mutex <m> --process <p> [--thread <t>]: Tenta adquirir mutex (com fila FIFO)",
+            "  mutex_unlock --mutex <m> --process <p> [--thread <t>]: Libera mutex e realiza handoff FIFO",
+            "  mutex_status                                   : Exibe estado dos mutexes, donos e filas de espera",
+            "  mutex_demo [--scenario buffer_video] [--quantum <ms>]: Executa cenário Buffer_Video",
+            "  deadlock_check                                 : Verifica ciclos Wait-For e estagnação",
+            "  memory_frames                                  : Exibe resumo ao vivo das molduras físicas (frames)",
+            "  sim_metrics                                    : Exibe métricas de execução (WT, TAT, CPU, faults)",
+            "  sim_timeline [--limit <n>] [--gantt]           : Exibe linha do tempo e/ou diagrama de Gantt",
+            "  sim_reset                                      : Reinicia relógio, filas, mutexes e métricas",
             "",
             "SISTEMA:",
             "  help                              : Exibe esta lista de ajuda",
