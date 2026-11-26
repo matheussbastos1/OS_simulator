@@ -1,7 +1,7 @@
 # ESPECIFICAÇÃO ARQUITETURAL DO SISTEMA — OS SIMULATOR
 
-> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
-> **Objetivo:** Estabelecer a arquitetura holística, o padrão de Portas e Adaptadores (Hexagonal Architecture) para desacoplamento temporal entre etapas, fluxos de integração intersubsistemas e controle de estado do OS Simulator.
+> **Status:** Especificação Oficial Consolidada (Etapa 5 — Processos, Threads, Escalonamento e Concorrência)  
+> **Objetivo:** Estabelecer a arquitetura holística, o padrão de Portas e Adaptadores (Hexagonal Architecture) para desacoplamento temporal entre etapas, fluxos de integração intersubsistemas e o modelo de simulação a eventos discretos do OS Simulator.
 
 ---
 
@@ -10,7 +10,7 @@
 O **OS Simulator** é projetado segundo uma arquitetura modular em camadas, orientada a objetos, com baixo acoplamento e alta coesão, estruturada sob o padrão de **Portas e Adaptadores (Ports and Adapters)**. Ele reproduz os comportamentos lógicos e mecanismos internos do sistema operacional Ubuntu Linux dentro de um ambiente isolado em memória no Python 3, executado sobre o Windows 11.
 
 ### 1.1. O Desacoplamento Temporal Entre Etapas
-Como o projeto é construído em quatro etapas acadêmicas consecutivas, o subsistema de Sistema de Arquivos (Etapa 1) não pode depender de implementações que ainda não foram criadas (E/S, RAID ou Segurança avançada). Para resolver isso com rigor de engenharia:
+Como o projeto é construído em etapas acadêmicas consecutivas (Etapas 1 a 5), o subsistema de Sistema de Arquivos (Etapa 1) não pode depender de implementações futuras (E/S, RAID, Segurança avançada, Memória ou Execução Discreta). Para resolver isso com rigor de engenharia:
 1. **Contrato de Armazenamento (`BlockDevicePort`):** Interface que define operações conceituais de leitura de bloco, gravação de bloco, consulta de capacidade, blocos livres e liberação.
    - *Na Etapa 1:* O `FileSystemService` consome o adaptador provisório em memória `InMemoryBlockDevice`.
    - *Na Etapa 2:* O subsistema `IOManager` implementa a mesma interface via `IOBlockDeviceAdapter`, incorporando a fila de requisições, o escalonador mecânico (`DiskScheduler`) e o arranjo `RAIDArray` sem que o `FileSystemService` necessite sofrer modificações estruturais.
@@ -54,8 +54,16 @@ flowchart TD
     end
 
     subgraph HighLevel ["Subsistemas de Alto Nível"]
-        VFS["Virtual File System & FilesystemService (i-nodes, Árvore)"]
-        PROC["ProcessManager (PCB, Escalonamento)"]
+        VFS["Virtual File System & FileSystemService (i-nodes, Árvore)"]
+        PROC["ProcessManager (PCB, Threads, StateMachine)"]
+    end
+
+    subgraph Stage5Exec ["Motor Discreto, Escalonamento e Concorrência (Etapa 5)"]
+        ENGINE["ExecutionEngine (LogicalClock + EventManager)"]
+        SCHED["PriorityRoundRobinScheduler"]
+        SYSCALL["SyscallDispatcher & BlockRegistry"]
+        SYNC["SynchronizationManager (Mutexes + WFG)"]
+        METRICS["MetricsCollector (Timeline, Gantt, Frames)"]
     end
 
     subgraph AdaptersStorage ["Implementações de Armazenamento"]
@@ -75,6 +83,17 @@ flowchart TD
     Kernel --> VFS
     Kernel --> PROC
     Kernel --> MEM
+    Kernel --> ENGINE
+
+    ENGINE --> PROC
+    ENGINE --> SCHED
+    ENGINE --> SYSCALL
+    ENGINE --> SYNC
+    ENGINE --> METRICS
+    ENGINE --> MEM
+    SYSCALL --> VFS
+    SYSCALL --> IOAdapter
+    SYSCALL --> BlockPort
 
     VFS --> BlockPort
     SWAP --> BlockPort
@@ -207,6 +226,40 @@ flowchart TD
 
 ---
 
+### 2.5. Arquitetura da Etapa 5: Simulação a Eventos Discretos, Escalonamento, Syscalls e Concorrência
+Na Etapa 5, o simulador passa a operar sob um **modelo temporal determinístico baseado em eventos discretos**, controlado inteiramente em milissegundos inteiros pelo `LogicalClock` e ordenado pela fila de prioridade `EventManager` (zero uso de `time.sleep` ou relógio real do hospedeiro).
+
+O `ExecutionEngine` (`os_simulator/process/engine.py`) atua como o orquestrador da execução da Etapa 5 dentro do `SimulationKernel`, conectando seis subsistemas principais:
+1. **Gerência de Processos e Threads (`ProcessManager` + `ProcessStateMachine`):** Impõe a máquina de 5 estados (`NEW`, `READY`, `RUNNING`, `BLOCKED`, `TERMINATED`) sobre processos (`Process`) e threads (`SimulatedThread`), mantendo o estado agregado do processo pai sincronizado com suas threads.
+2. **Escalonador de CPU (`PriorityRoundRobinScheduler`):** Mantém filas FIFO por nível de prioridade (nível `1` é o mais alto; inteiros maiores representam prioridades menores), aplica preempção cruzada imediata quando uma thread mais prioritária torna-se `READY` e rotaciona threads de mesma prioridade ao expirar o `quantum_ms` configurável.
+3. **Despacho de Syscalls e E/S (`SyscallDispatcher` + `BlockRegistry`):** Avalia `WorkloadStep` e perfis `IOProfile` (`NONE`, `FIXED`, `PERIODIC`, `RANDOM` determinístico com semente por thread) estritamente pelo tempo de CPU consumido (`cpu_consumed_ms`). Integra `IO_READ`/`IO_WRITE` ao `IOManager` (ou `BlockDevicePort`), `FS_READ`/`FS_WRITE` ao `FileSystemService` (validando ACLs via `ExecutionContext` ativo), `SLEEP_WAIT`, `YIELD`, `MUTEX_LOCK`/`MUTEX_UNLOCK`, `MEMORY_LOAD`/`MEMORY_WRITE` e `EXIT`, agendando eventos futuros de `IO_COMPLETION` ou `SLEEP_WAKEUP`.
+4. **Sincronização e Concorrência (`SynchronizationManager` + `Mutex`):** Garante exclusão mútua com fila de espera estritamente FIFO, *handoff* imediato de posse na liberação (`release` ou encerramento de thread), detecção de ciclos em Grafo Wait-For (`DeadlockDetectedException`) e diagnóstico de estagnação sem progresso (`SimulationStallException`).
+5. **Integração com Memória Virtual (Etapa 4):** A cada tick de CPU de um processo `NORMAL` (ou mediante syscall explícita `MEMORY_LOAD`/`MEMORY_WRITE`), o `ExecutionEngine` invoca `MemoryManager.execute_instruction(...)` utilizando `float(now_ms)` como timestamp, registrando `HIT` e `PAGE_FAULT`, respeitando `LRU`/`SECOND_CHANCE` e liberando molduras/slots ao encerrar o processo.
+6. **Coleta de Métricas e Observabilidade (`MetricsCollector`):** Registra a linha do tempo cronológica (`TimelineEntry`), fatias contíguas de execução/ociosidade (`GanttSlice`), acessos a molduras físicas (`FrameAccessRecord`, sincronizado em tempo real com `PhysicalMemory` e `PageTable` via `build_frames_summary`), e calcula `WT`, `TAT`, `RT`, utilização de CPU e vazão.
+
+```mermaid
+flowchart TD
+    KERNEL["SimulationKernel"] --> CLOCK["LogicalClock (ms inteiros)"]
+    KERNEL --> EM["EventManager (Min-Heap: timestamp, prio, seq)"]
+    KERNEL --> ENGINE["ExecutionEngine (Loop Discreto)"]
+
+    ENGINE --> CLOCK
+    ENGINE --> EM
+    ENGINE --> PM["ProcessManager & ProcessStateMachine"]
+    ENGINE --> SCHED["PriorityRoundRobinScheduler"]
+    ENGINE --> SYSCALL["SyscallDispatcher & BlockRegistry"]
+    ENGINE --> SYNC["SynchronizationManager (Mutexes + Wait-For Graph)"]
+    ENGINE --> MEM["MemoryManager (Etapa 4: MMU, Frames, LRU/Clock, Swap)"]
+    ENGINE --> METRICS["MetricsCollector (Timeline, Gantt, WT/TAT/RT)"]
+
+    SYSCALL -->|IO_READ / IO_WRITE| IO["IOManager / BlockDevicePort"]
+    SYSCALL -->|FS_READ / FS_WRITE| FS["FileSystemService + ExecutionContext (ACLs)"]
+    SYSCALL -->|IO_COMPLETION / SLEEP_WAKEUP| EM
+    METRICS -->|build_frames_summary| MEM
+```
+
+---
+
 ## 3. FRONTEIRAS E CONTRATOS DOS SUBSISTEMAS
 
 ### 3.1. CLI (Command Line Interface)
@@ -226,8 +279,12 @@ flowchart TD
 - **Fronteira:** Atua como filtro de autorização via `AuthorizationPort`.
 
 ### 3.5. Process Manager e Memory Manager
-- **Responsabilidade:** Controle de ciclo de vida de processos (PCBs), gerenciamento contíguo da Área Reservada (`memory_compact`), tabelas de páginas, molduras físicas, tradução por MMU, tratamento de Page Fault considerando origens válidas e políticas de substituição LRU e Segunda Chance.
+- **Responsabilidade:** Controle de ciclo de vida de processos e threads (PCBs, `SimulatedThread`, máquina de 5 estados), gerenciamento contíguo da Área Reservada (`memory_compact`), tabelas de páginas, molduras físicas, tradução por MMU, tratamento de Page Fault considerando origens válidas e políticas de substituição LRU e Segunda Chance.
 - **Fronteira:** Utiliza `BlockDevicePort` para operações de swap-out e swap-in.
+
+### 3.6. Execution Engine, Escalonador de CPU, Syscalls, Sincronização e Métricas (Etapa 5)
+- **Responsabilidade:** Avanço determinístico do relógio lógico (`LogicalClock`), drenagem ordenada de eventos discretos (`EventManager`), escalonamento preemptivo por prioridade com Round-Robin (`PriorityRoundRobinScheduler`), despacho de syscalls por tempo de CPU consumido (`SyscallDispatcher`), controle de exclusão mútua e detecção de deadlocks/estagnação (`SynchronizationManager`) e geração de métricas, linha do tempo e Gantt (`MetricsCollector`).
+- **Fronteira:** Orquestra os subsistemas existentes via suas interfaces públicas (`IOManager`/`BlockDevicePort`, `FileSystemService`, `MemoryManager`, `AuditLog`) sem acoplar regras de escalonamento aos adaptadores de armazenamento ou memória.
 
 ---
 
@@ -301,28 +358,48 @@ sequenceDiagram
 
 ## 5. ESTADO GLOBAL DA SIMULAÇÃO: O `SimulationKernel`
 
-O contêiner central da simulação agrega as portas e subsistemas de forma unificada:
+O contêiner central da simulação agrega as portas e todos os subsistemas das Etapas 1 a 5 de forma unificada (`os_simulator/core/simulation_kernel.py`):
 
 ```python
 class SimulationKernel:
-    """Núcleo orquestrador e contêiner do estado global da simulação."""
+    """Central orchestration kernel for the OS Simulator."""
 
-    def __init__(self, config: SystemConfiguration):
-        self.context: ExecutionContext                  # Usuário corrente, CWD, modo de privilégio
-        self.auth_port: AuthorizationPort               # BootstrapSecurityPolicy -> SecurityManager
-        self.block_device: BlockDevicePort              # InMemoryBlockDevice -> IOManagerAdapter
-        self.vfs: VirtualFileSystem
-        self.filesystem_service: FileSystemService
-        self.memory_manager: Optional[MemoryManager]
-        self.process_manager: Optional[ProcessManager]
-        self.audit_log: Optional[AuditLog]
+    def __init__(
+        self,
+        block_device: Optional[BlockDevicePort] = None,
+        auth_port: Optional[AuthorizationPort] = None,
+        default_strategy: AllocationStrategy = AllocationStrategy.INDEXED,
+        disk_capacity: int = 16,
+        block_size: int = 4096,
+        io_manager: Optional[IOManager] = None,
+        raid_controller: Optional[RAIDController] = None,
+        ssd_device: Optional[SSDDevice] = None,
+        scheduler: Optional[DiskScheduler] = None,
+        kernel_secret: Optional[bytes] = None,
+        process_manager: Optional[ProcessManager] = None,
+        memory_manager: Optional[MemoryManager] = None,
+        reserved_memory_kb: int = 4096,
+        dynamic_frames: int = 16,
+        quantum_ms: int = 4,
+        default_seed: int = 42,
+    ):
+        self.context: ExecutionContext
+        self.auth: AuthorizationPort                  # SecurityManager (ou auth_port injetado)
+        self.device: BlockDevicePort                  # IOBlockDeviceAdapter -> RAID5Controller / InMemoryBlockDevice
+        self.io_manager: Optional[IOManager]
+        self.raid_controller: Optional[RAIDController]
+        self.ssd_device: SSDDevice
+        self.fs_service: FileSystemService
+        self.process_manager: ProcessManager
+        self.memory_manager: MemoryManager
+        self.audit_log: AuditLog
+        # Etapa 5:
+        self.clock: LogicalClock
+        self.event_manager: EventManager
+        self.cpu_scheduler: PriorityRoundRobinScheduler
+        self.sync_manager: SynchronizationManager
+        self.metrics_collector: MetricsCollector
+        self.syscall_dispatcher: SyscallDispatcher
+        self.execution_engine: ExecutionEngine
         self.is_running: bool
-
-    def boot(self) -> None:
-        """Inicializa os subsistemas na ordem arquitetural correta."""
-        ...
-
-    def execute_syscall(self, syscall_name: str, **kwargs) -> Any:
-        """Ponto de entrada único e auditado para operações privilegiadas."""
-        ...
 ```

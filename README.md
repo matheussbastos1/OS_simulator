@@ -10,12 +10,13 @@
 
 ## 1. OBJETIVOS ACADÊMICOS E FILOSOFIA DE DESIGN
 
-O propósito primordial do projeto é fornecer uma experiência prática, mensurável e determinística sobre os quatro pilares clássicos da Engenharia de Sistemas Operacionais:
+O propósito primordial do projeto é fornecer uma experiência prática, mensurável e determinística sobre os pilares clássicos da Engenharia de Sistemas Operacionais:
 
 1. **Sistemas de Arquivos (Filesystem):** Hierarquia VFS, metadados POSIX, abstração de i-nodes, estratégias de alocação (Contígua, FAT encadeada e Indexada) e análise de fragmentação interna e externa, operando sobre o contrato `BlockDevicePort`.
 2. **Entrada e Saída (I/O) e Armazenamento Confiável:** Gerenciamento de requisições de E/S (`IORequest`), algoritmos de escalonamento mecânico de braço de disco (FCFS, SSTF, SCAN, C-SCAN), simulação de controladores de SSD com *Wear Leveling* e arranjos tolerantes a falhas RAID (RAID 0, RAID 1, RAID 4 e RAID 5 com cálculo de paridade XOR e recuperação de falhas *on-the-fly*).
 3. **Segurança e Proteção:** Controle de acesso por identidade e grupos, autenticação com derivação de chave criptográfica e salt individual (PBKDF2-HMAC-SHA256 com 600.000 iterações), matriz de autorização por Listas de Controle de Acesso (ACL) e permissões octais/rwx POSIX, anéis de privilégio (Modo Usuário vs. Modo Kernel), log de auditoria inviolável, integridade com HMAC do Kernel e criptografia AES-256-GCM em repouso.
 4. **Gerenciamento de Memória Real e Virtual:** Memória física particionada em Área Reservada Contígua (para SO e drivers, com controle de fragmentação externa e desfragmentação por compactação deslizante `memory_compact --reserved`) e Área Dinâmica Paginada (com MMU, tradução lógica-física, tratamento de falta de página considerando origens válidas: Imagem, Zero-fill ou Swap, políticas de substituição LRU e Segunda Chance/Clock e partição de Swap integrada via `BlockDevicePort`).
+5. **Processos, Threads, Escalonamento e Concorrência (Etapa 5):** Simulação determinística a eventos discretos (`LogicalClock`, `EventManager`, `ExecutionEngine`), máquina de 5 estados (`NEW`, `READY`, `RUNNING`, `BLOCKED`, `TERMINATED`), threads simuladas (`SimulatedThread`), escalonador preemptivo multinível por prioridade + Round-Robin (`PriorityRoundRobinScheduler`), syscalls por tempo de CPU e perfis de E/S (`IO_READ`/`IO_WRITE`, `FS_READ`/`FS_WRITE`, `SLEEP_WAIT`, `YIELD`, `MUTEX_*`, `MEMORY_*`, `EXIT`), sincronização por mutex FIFO (`SynchronizationManager`), detecção de deadlock por Grafo Wait-For e estagnação, acoplamento à paginação da Etapa 4 e métricas completas (`WT`, `TAT`, `RT`, Timeline e Gantt).
 
 ---
 
@@ -50,14 +51,15 @@ OS_simulator/
 ├── tests/                     # Testes determinísticos e verificação de conformidade
 │   └── GROUND_TRUTH.md        # Casos de teste de referência oficial (Ground Truth)
 │
-└── os_simulator/              # Código-fonte modular do sistema (a ser implementado)
-    ├── core/                  # Kernel, ExecutionContext, exceptions e portas abstratas
-    ├── filesystem/            # VFS, Inode, Node, FAT, Indexação e InMemoryBlockDevice
-    ├── io/                    # PhysicalDisk, Escalonadores, RAID 0/1/4/5, SSD e IOManager
-    ├── security/              # User, Group, ACL, Auth PBKDF2, AuditLog, AES-GCM e Bootstrap
+└── os_simulator/              # Código-fonte modular do sistema
+    ├── core/                  # Kernel, LogicalClock, EventManager, ExecutionContext, exceptions e portas
+    ├── filesystem/            # VFS, Inode, Node, FAT, Indexação e serviço de arquivos
+    ├── storage/               # InMemoryBlockDevice, PhysicalDisk, RAID 0/1/4/5 e IOBlockDeviceAdapter
+    ├── io/                    # IOManager, escalonadores de disco (FCFS/SSTF/SCAN/C-SCAN) e SSD
+    ├── security/              # User, Group, ACL, Auth PBKDF2, AuditLog, AES-GCM e integridade
     ├── memory/                # PhysicalMemory, MMU, PageTable, LRU, Clock e SwapManager
-    ├── process/               # Process, PCB, gerenciamento de ciclo de vida
-    └── cli/                   # Shell interativo e formatadores visuais
+    ├── process/               # Process, SimulatedThread, StateMachine, Scheduler, Syscalls, Sync, Metrics e ExecutionEngine
+    └── cli/                   # Shell interativo, parser e handlers das Etapas 1 a 5
 ```
 
 ---
@@ -74,6 +76,7 @@ O desenvolvimento é rigorosamente incremental. Cada etapa é isolada em sua pr�
 - `feature/etapa-2-io-raid`: Etapa 2 (E/S, Escalonamento e RAID).
 - `feature/etapa-3-security`: Etapa 3 (Segurança, ACL e Proteção).
 - `feature/etapa-4-memory`: Etapa 4 (Gerenciamento de Memória Real e Virtual).
+- `feat/etapa-5-processos-concorrencia`: Etapa 5 (Processos, Threads, Escalonamento Prioridade+RR, Syscalls, Mutex/Deadlock e Métricas).
 
 ---
 
@@ -103,7 +106,7 @@ cd "OS_simulator"
 pip install -r requirements.txt
 ```
 
-### 6.2. Execução do Shell Interativo (Etapas 1, 2, 3 e 4 operacionais)
+### 6.2. Execução do Shell Interativo (Etapas 1, 2, 3, 4 e 5 operacionais)
 ```powershell
 # Iniciar o simulador interativo via Python
 python -m os_simulator.cli
@@ -164,6 +167,25 @@ Kernel inicializado com sucesso. Digite 'help' para comandos.
 | `page_replacement` | `page_replacement --algorithm second_chance` | Seleção de Algoritmo de Reposição (LRU / Segunda Chance) |
 | `page_table` | `page_table --process App_Navegador` | Consulta de Tabela de Páginas e Fragmentação Interna |
 | `memory_map` | `memory_map` | Mapa Visual Unificado de Memória Física e Molduras |
+| `create_process` (Etapa 5) | `create_process --name App --size 8KB --priority 2 --burst 6 --io-profile periodic --io-every 2 --io-duration 3 --pages 0,1` | Criação com Escalonamento, E/S e Padrão de Páginas |
+| `ps` / `process_status` | `ps [--all]` / `process_status [--all]` | Listagem de Processos, Threads, Estados e Bloqueios |
+| `process_admit` | `process_admit --process <nome\|pid>` | Admissão Manual de Processo `NEW` $\to$ `READY` |
+| `thread_create` | `thread_create --process App --name worker --priority 2 --burst 4` | Criação de Thread Simulada Escalonável |
+| `thread_status` | `thread_status [--process App] [--active]` | Status Detalhado das Threads Simuladas |
+| `sched_config` | `sched_config [--algorithm priority_rr] [--quantum 4] [--seed 42]` | Configuração de Quantum e Seed do Escalonador |
+| `sched_status` | `sched_status` | Estado das Filas por Prioridade, Thread `RUNNING` e Bloqueios |
+| `sched_step` | `sched_step [--ms 2]` | Avanço Determinístico por Milissegundos Lógicos |
+| `sched_run` | `sched_run [--max-ms 20] [--until-process P] [--until-event EV]` | Execução Discreta até Conclusão ou Condição de Parada |
+| `process_syscall` | `process_syscall --process App --type io_read --at-cpu 2 --duration 3 --block 0` | Agendamento ou Execução Imediata (`--now`) de Syscall |
+| `mutex_create` | `mutex_create [--name] Buffer_Video` | Criação de Mutex para Sincronização |
+| `mutex_lock` / `mutex_unlock` | `mutex_lock --mutex M --process P [--thread T]` | Aquisição/Liberação com Fila FIFO e Handoff Imediato |
+| `mutex_status` | `mutex_status` | Diagnóstico de Mutexes, Donos, Filas FIFO e Ciclos |
+| `mutex_demo` | `mutex_demo --scenario buffer_video --quantum 2` | Demonstração Produtor/Consumidor `Buffer_Video` |
+| `deadlock_check` | `deadlock_check` | Detecção de Deadlock (Wait-For Graph) e Estagnação |
+| `memory_frames` | `memory_frames` | Resumo ao Vivo das Molduras Físicas Sincronizado |
+| `sim_metrics` | `sim_metrics` | Métricas de Execução (`WT`, `TAT`, `RT`, CPU %, Faults) |
+| `sim_timeline` | `sim_timeline [--limit 10] [--gantt]` | Linha do Tempo Cronológica e Diagrama de Gantt |
+| `sim_reset` | `sim_reset` | Reinicialização do Relógio, Filas, Mutexes e Métricas |
 
 
 ---
@@ -173,26 +195,32 @@ Kernel inicializado com sucesso. Digite 'help' para comandos.
 A validação de conformidade de cada subsistema utiliza testes automatizados orientados pelos cenários determinísticos formais definidos em `tests/GROUND_TRUTH.md`:
 
 ```powershell
-# Execução dos testes automatizados via unittest (Python padrão)
+# Execução completa dos testes automatizados (Etapas 1 a 5 — 274 testes via unittest)
+python -m unittest discover -s tests -p "test_*.py"
+
+# Execução com saída detalhada ou foco na Etapa 5
 python -m unittest discover -s tests -p "test_*.py" -v
+python -m unittest tests/test_process_state_machine.py tests/test_process_scheduler.py tests/test_process_syscalls_io.py tests/test_process_concurrency_mutex.py tests/test_process_metrics_timeline.py tests/test_process_memory_integration.py tests/test_cli_process_commands.py -v
 ```
 
 Cenários homologados:
-- **`FS-001` a `FS-003`:** Hierarquias de pastas, i-nodes e cálculo de fragmentação interna (2.048 bytes para 10 KB) e externa (0 bytes no indexado).
+- **`FS-001` a `FS-004`:** Hierarquias de pastas, i-nodes, atomicidade de gravação e cálculo de fragmentação interna (2.048 bytes para 10 KB) e externa (0 bytes no indexado).
 - **`IO-001` e `IO-002`:** Escalonamento SSTF com 208 trilhas percorridas e recuperação de disco com falha em RAID 5 via XOR.
 - **`SEC-001` a `SEC-003`:** Autenticação PBKDF2 com 600.000 iterações, bloqueio de acesso 750 com auditoria e integridade SHA-256/HMAC.
 - **`MEM-001` a `MEM-005`:** Fragmentação externa em área reservada, compactação deslizante, paginação, MMU (`MEM-004A` e `MEM-004B`) e ciclo determinístico de Page Fault e Swap com origens válidas (`MEM-005`).
+- **`PROC-001` a `PROC-005`:** Preempção por prioridade e rotação Round-Robin, syscalls por tempo de CPU (`cpu_consumed_ms`), exclusão mútua `Buffer_Video`, detecção de deadlock Wait-For / estagnação e execução acoplada à paginação/swap com invariantes de métricas (`TAT == CPU + WT + BLK`).
 
 ---
 
-## 9. ROTEIRO DE DEMONSTRAÇÕES FUTURAS
+## 9. ROTEIRO DE DEMONSTRAÇÕES
 
-O projeto prevê quatro demonstrações práticas estruturadas a serem entregues sequencialmente com cada etapa:
+O projeto entrega cinco demonstrações práticas estruturadas correspondentes às cinco etapas:
 
 - **Demonstração 1 (Sistema de Arquivos):** Navegação hierárquica no VFS, criação de arquivos com as três estratégias de alocação via `InMemoryBlockDevice` e relatórios de fragmentação interna e externa.
 - **Demonstração 2 (E/S e RAID):** Comparação entre FCFS, SSTF e SCAN com medição de deslocamento; montagem de arranjo RAID 5, injeção de falha física e reconstrução de bloco de dados em tempo real via paridade XOR.
 - **Demonstração 3 (Segurança e Proteção):** Fluxo de login com PBKDF2 (600k iterações), tentativa de acesso não autorizado negada por ACL (750), auditoria em tempo real, criptografia AES-256-GCM e varredura de antivírus simulado.
 - **Demonstração 4 (Gerenciamento de Memória):** Alocação de processos críticos e desfragmentação contígua via `memory_compact --reserved`, carga de processos paginados, simulação de Page Fault respeitando origens válidas, desalocação de página limpa sem swap e swap-out de página suja via `BlockDevicePort`.
+- **Demonstração 5 (Processos, Threads, Escalonamento e Concorrência):** Configuração `sched_config --quantum 2`, criação de processos com `--priority`, `--burst`, `--arrival`, `--io-profile` e `--pages`, execução passo a passo (`sched_step`) e completa (`sched_run`), demonstração `mutex_demo --scenario buffer_video`, inspeção de molduras ao vivo (`memory_frames`), métricas (`sim_metrics`) e diagrama de Gantt (`sim_timeline --gantt`).
 
 ---
 
