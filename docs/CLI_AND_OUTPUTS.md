@@ -1,7 +1,7 @@
 # DICIONÁRIO OFICIAL DA CLI E PADRÕES DE SAÍDA — OS SIMULATOR
 
-> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
-> **Objetivo:** Estabelecer o contrato formal da interface de linha de comando (CLI), respeitando rigorosamente a sintaxe oficial fornecida pelo professor e documentando parâmetros, tipos, unidades e padrões visuais.
+> **Status:** Especificação Oficial Consolidada (Etapa 5 — Processos, Threads, Escalonamento e Concorrência)  
+> **Objetivo:** Estabelecer o contrato formal da interface de linha de comando (CLI), respeitando rigorosamente a sintaxe oficial e documentando todos os parâmetros, aliases, tipos, unidades e padrões visuais das Etapas 1 a 5.
 
 ---
 
@@ -313,20 +313,28 @@
 ---
 
 ### 2.15. `create_process`
-- **Sintaxe Oficial:** `create_process --name "<nome>" --size <tamanho> --type <critical|normal>`
-- **Exemplos do Professor:**
+- **Sintaxe Oficial:** `create_process --name "<nome>" --size <tamanho> --type <critical|normal> [--priority <int>] [--burst <ms>] [--arrival <ms>] [--io-profile <none|fixed|periodic|random>] [--io-every <ms>] [--io-duration <ms>] [--seed <int>] [--pages <p0,p1,...>] [--no-admit]`
+- **Exemplos:**
   - `create_process --name "Kernel_DiskDriver" --size 512KB --type critical`
   - `create_process --name "App_Navegador" --size 10KB --type normal`
+  - `create_process --name "AppStage5" --size 8KB --type normal --priority 2 --burst 6 --arrival 1 --io-profile periodic --io-every 2 --io-duration 3 --pages 0,1:w`
 - **Parâmetros Obrigatórios:**
-  - `--name "<nome>"`: Nome identificador do processo ou driver.
-  - `--size <tamanho>`: Tamanho de memória solicitado (ex.: `512KB`, `10KB`).
-  - `--type <critical|normal>`:
+  - `--name "<nome>"` (`-n`): Nome identificador do processo ou driver.
+  - `--size <tamanho>` (`-s`): Tamanho de memória solicitado (ex.: `512KB`, `10KB`).
+  - `--type <critical|normal>` (`-t`, ou `--reserved` / `-r` para `critical`):
     - `critical`: Processo de núcleo/driver alocado contiguamente na **Área Reservada**.
     - `normal`: Processo de usuário alocado dinamicamente na **Área Paginada**.
-- **Parâmetros Opcionais (Aliases):** Sintaxe posicional `create_process <nome> <tamanho_kb> [--reserved]`.
-- **Pré-condições:** Se `--type critical`, exige privilégio de `root`/Kernel Mode.
-- **Subsistema:** `process` $\to$ `memory`.
-- **Saída de Sucesso:** PCB criado, PID retornado e confirmação da alocação de memória.
+- **Parâmetros Opcionais da Etapa 5 (Retrocompatíveis):**
+  - `--priority <int>`: Prioridade (`>= 1`, sendo `1` a maior; padrão `3`).
+  - `--burst <ms>`: Burst total de CPU em ms (`>= 0`; se `> 0`, cria thread `"main"`).
+  - `--arrival <ms>`: Tempo lógico de chegada em ms (se `> clock.now_ms`, inicia em `NEW` e agenda `PROCESS_ARRIVAL`).
+  - `--io-profile <none|fixed|periodic|random>`, `--io-every <ms>`, `--io-duration <ms>`, `--seed <int>`: Perfil automático de E/S.
+  - `--pages <p0,p1,...>`: Padrão de acesso a páginas virtuais por tick (suporta sufixo `:w`/`w` para escrita, ex.: `0,1,0:w`).
+  - `--no-admit`: Mantém processo em `NEW` até invocação manual de `process_admit`.
+- **Parâmetros Alternativos (Aliases):** Sintaxe posicional `create_process <nome> <tamanho> [critical|normal]`.
+- **Pré-condições:** Se `--type critical`, exige privilégio de `root`/Kernel Mode. Em falha de memória (`OutOfMemoryException` / `MemoryFragmentationException`), executa rollback integral do PCB e threads.
+- **Subsistema:** `process` $\to$ `memory` ($\to$ `ExecutionEngine` quando flags da Etapa 5 são informadas).
+- **Saída de Sucesso:** PCB criado, PID retornado, confirmação da alocação de memória e resumo de prioridade/burst/chegada/perfil de E/S quando aplicável.
 
 ---
 
@@ -376,6 +384,69 @@
 - **Parâmetros Obrigatórios:** `--process "<nome>"` (ou `--pid <PID>`), `--instruction "<instrucao>"`.
 - **Subsistema:** `process` $\to$ `memory` (MMU, Page Fault Handler, LRU/Clock, Swap).
 - **Saída de Sucesso:** Execução do acesso, resolução de falta de página (se ausente) respeitando a origem válida, substituição de página se memória cheia e confirmação do acesso.
+
+---
+
+### 2.16. Comandos de Processos, Threads, Escalonamento, Syscalls, Concorrência e Métricas (Etapa 5)
+
+#### 2.16.1. `ps` / `process_status`
+- **Sintaxe:** `ps [--all]` ou `process_status [--all]` (`-a` como alias de `--all`).
+- **Comportamento:** Lista processos ativos (ou todos, incluindo `TERMINATED`, com `--all`) e suas respectivas threads, exibindo PID, Nome, Tipo, Estado, Prioridade, consumo de CPU (`cpu_consumed_ms/burst`), motivo de bloqueio (`block_reason(blocked_on)`) e mutexes retidos.
+
+#### 2.16.2. `process_admit`
+- **Sintaxe:** `process_admit --process <nome|pid>` (aliases `-p`, `--pid` ou argumento posicional `<nome|pid>`).
+- **Comportamento:** Admite um processo no estado `NEW` para `READY` (e enfileira suas threads prontas no escalonador) ou agenda `PROCESS_ARRIVAL` caso `arrival_time_ms > clock.now_ms`.
+
+#### 2.16.3. `thread_create`
+- **Sintaxe:** `thread_create --process <nome|pid> --name <tname> [--priority <int>] [--burst <ms>] [--arrival <ms>] [--io-profile <none|fixed|periodic|random>] [--io-every <ms>] [--io-duration <ms>] [--seed <int>] [--pages <p0,p1,...>]`
+- **Aliases:** `-p` / `--pid` para `--process`, `-n` para `--name` (aceita também `<proc> <tname>` posicionais).
+- **Pré-condições:** Processo pai existente e não encerrado (proibido em `Nucleo_Base` PID 0).
+
+#### 2.16.4. `thread_status`
+- **Sintaxe:** `thread_status [--process <nome|pid>] [--active]` (aliases `-p`, `--pid` ou posicional `<nome|pid>`).
+- **Comportamento:** Exibe tabela detalhada das threads simuladas (TID, PID, Nome, Estado, Prioridade, CPU consumida/burst, quantum usado e bloqueios/mutexes).
+
+#### 2.16.5. `sched_config`
+- **Sintaxe:** `sched_config [--algorithm <priority_rr>] [--quantum <ms>] [--seed <int>]`
+- **Aliases:** `--alg` / `-a` para `--algorithm`, `-q` para `--quantum`, `-s` para `--seed`.
+- **Comportamento:** Sem argumentos, exibe a configuração corrente (`priority_rr`, quantum padrão `4 ms`, seed padrão `42`, overhead). Com parâmetros, valida e atualiza dinamicamente o `quantum_ms` (`>= 1`) e/ou `default_seed`.
+
+#### 2.16.6. `sched_status`
+- **Sintaxe:** `sched_status`
+- **Comportamento:** Exibe o relógio lógico atual, a thread `RUNNING`, todas as filas `READY` agrupadas por nível de prioridade, entidades `BLOCKED` com tempo previsto de desbloqueio, contadores de despachos/trocas de contexto/preempções/expirações e eventos pendentes.
+
+#### 2.16.7. `sched_step`
+- **Sintaxe:** `sched_step [--ms <int>]` (alias `-m` ou posicional `<int>`, padrão `1`).
+- **Comportamento:** Avança o `ExecutionEngine` em até `ms` milissegundos lógicos (`>= 0`), respeitando rigorosamente o limite `start_ms + ms`, tratando eventos discretos, syscalls e paginação.
+
+#### 2.16.8. `sched_run`
+- **Sintaxe:** `sched_run [--max-ms <int>] [--until-process <nome|pid>] [--until-event <tipo_evento>]`
+- **Comportamento:** Executa o loop discreto até concluir todas as pendências (`COMPLETED`), atingir `--max-ms` (`MAX_MS_REACHED`), encerrar `--until-process` (`TARGET_PROCESS_TERMINATED`) ou drenar `--until-event` (`TARGET_EVENT_REACHED`). Captura `DeadlockDetectedException` e `SimulationStallException` retornando diagnóstico estruturado.
+
+#### 2.16.9. `process_syscall`
+- **Sintaxe:** `process_syscall --process <nome|pid> --type <io_read|io_write|fs_read|fs_write|sleep|yield|mutex_lock|mutex_unlock|memory_load|memory_write|exit> [--thread <tname|tid>] [--at-cpu <ms>] [--duration <ms>] [--block <id>] [--path <p>] [--data <txt>] [--mutex <name>] [--page <n>] [--write] [--now]`
+- **Aliases:** `-p` / `--pid` para `--process`, `-t` / `--tid` para `--thread`.
+- **Comportamento:** Agenda um `WorkloadStep` para `cpu_consumed_ms == trigger_cpu_ms` (via `--at-cpu`, padrão `cpu_consumed_ms` atual) ou executa imediatamente (`--now`, mutuamente exclusivo com `--at-cpu`).
+
+#### 2.16.10. `mutex_create`, `mutex_lock`, `mutex_unlock`, `mutex_status` e `mutex_demo`
+- **`mutex_create [--name] <nome>`** (`-n`): Cria mutex nomeado no estado `LIVRE`.
+- **`mutex_lock --mutex <nome> --process <nome|pid> [--thread <tname|tid>]`** (`-m`/`--name`, `-p`/`--pid`, `-t`/`--tid`): Tenta adquirir mutex imediatamente; em contenção, bloqueia a thread em fila FIFO e executa detecção de deadlock.
+- **`mutex_unlock --mutex <nome> --process <nome|pid> [--thread <tname|tid>]`**: Libera o mutex e transfere a posse imediatamente (*handoff* FIFO) para a próxima thread aguardando, se houver.
+- **`mutex_status`**: Exibe donos, filas FIFO de espera, contadores e eventuais ciclos de deadlock.
+- **`mutex_demo [--scenario buffer_video] [--quantum <ms>]`** (`-q`, padrão `2`): Executa o cenário produtor/consumidor `Buffer_Video` no processo `Player_Video` com threads `T1` e `T2`, comprovando seções críticas disjuntas.
+
+#### 2.16.11. `deadlock_check`
+- **Sintaxe:** `deadlock_check`
+- **Comportamento:** Executa varredura do Grafo Wait-For (`detect_deadlocks`) e verificação de estagnação (`check_no_progress`), classificando o estado como `SAUDÁVEL`, `DEADLOCK DETECTADO` ou `ESTAGNAÇÃO DETECTADA (No-Progress)`.
+
+#### 2.16.12. `memory_frames`
+- **Sintaxe:** `memory_frames`
+- **Comportamento:** Exibe a tabela sincronizada ao vivo das molduras físicas da RAM dinâmica (`MemoryManager.physical_memory.frames` + `PageTableEntry`), indicando estado (`OCUPADA`/`LIVRE`), PID, página lógica, último evento (`HIT`/`PAGE_FAULT`/`N/A`), timestamp do último acesso, bits `Dirty` e `Ref` e algoritmo de substituição ativo.
+
+#### 2.16.13. `sim_metrics`, `sim_timeline` e `sim_reset`
+- **`sim_metrics`**: Exibe o relatório consolidado de métricas globais (tempo total, CPU ocupada/ociosa, utilização %, trocas de contexto, despachos/preempções, syscalls, bloqueios E/S e mutex, page hits/faults, `WT` médio, `TAT` médio, vazão) e detalhamento por processo/thread (`CPU`, `WT`, `BLK`, `TAT`, `RT`).
+- **`sim_timeline [--limit <n>] [--gantt]`** (`-l`, `-g`): Exibe a linha do tempo cronológica de eventos (opcionalmente limitada às últimas `n` entradas) e, com `--gantt`, anexa o Diagrama de Gantt contíguo da CPU (incluindo intervalos `IDLE`).
+- **`sim_reset`**: Reinicia o relógio lógico para `0 ms`, limpa filas do escalonador, eventos, mutexes, histórico de syscalls/métricas e processos/memória de usuário, preservando `Nucleo_Base` (PID 0) e o quantum configurado.
 
 ---
 
@@ -484,5 +555,81 @@ Segmentos Reorganizados:
   [2048 - 4095 KB] : [BLOCO LIVRE CONSOLIDADO] (2.048 KB) - LIVRE
 ----------------------------------------------------------------------
 Fragmentação Externa        : 0 KB (Capacidade máxima contígua: 2.048 KB)
+======================================================================
+```
+
+### 3.6. Exemplos da Etapa 5 — Escalonamento, Concorrência, Molduras e Métricas
+
+#### `sched_status` e `memory_frames`
+```text
+Relógio Lógico Atual : 3 ms
+======================================================================
+        FILAS DO ESCALONADOR DE CPU (PRIORIDADE + ROUND-ROBIN)        
+======================================================================
+Quantum configurado          : 4 ms
+Overhead troca de contexto   : 0 ms
+Thread em Execução (RUNNING) : TID 1 'main' (PID 100, Prio 2, Quantum 3/4 ms, Restante 3 ms)
+----------------------------------------------------------------------
+Filas de Prontos (1 = maior prioridade):
+  Prioridade 1: [vazia]
+  Prioridade 2: [vazia]
+  Prioridade 3: [vazia]
+  Prioridade 4: [vazia]
+  Prioridade 5: [vazia]
+----------------------------------------------------------------------
+Despachos: 1 | Trocas de Contexto: 0 | Preempções: 0 | Expirações de Quantum: 0
+======================================================================
+
+======================================================================
+            RESUMO SINCRONIZADO DAS MOLDURAS FÍSICAS (FRAMES)
+======================================================================
+Algoritmo de Substituição Ativo: LRU
+------------------------------------------------------------------------------
+Moldura  | Estado   | PID   | Página  | Evento      | Últ.Acesso | Dirty | Ref
+------------------------------------------------------------------------------
+0        | OCUPADA  | 100   | 0       | HIT         | 2.0        | Sim   | Sim
+1        | OCUPADA  | 100   | 1       | PAGE_FAULT  | 1.0        | Não   | Sim
+======================================================================
+```
+
+#### `mutex_demo --scenario buffer_video --quantum 2`
+```text
+======================================================================
+           DEMONSTRAÇÃO DE CONCORRÊNCIA E MUTEX — BUFFER_VIDEO
+======================================================================
+Cenário              : Buffer_Video (Processo 'Player_Video', PID 100)
+Quantum Configurado  : 2 ms
+Exclusão Mútua       : SIM (seções críticas disjuntas, zero condição de corrida)
+Mutex 'Buffer_Video' : locked=False | aquisições=2 | liberações=2 | contenções=1
+...
+======================================================================
+```
+
+#### `sim_metrics` e `sim_timeline --gantt`
+```text
+======================================================================
+          RELATÓRIO DE MÉTRICAS DE EXECUÇÃO E ESCALONAMENTO
+======================================================================
+Tempo Total de Simulação  : 9 ms
+Tempo de CPU Ocupada      : 6 ms
+Tempo de CPU Ociosa (Idle): 3 ms
+Utilização da CPU         : 66.67%
+Trocas de Contexto        : 2
+Despachos / Preempções    : 3 / 0
+Syscalls Executadas       : 1
+Bloqueios (E/S / Mutex)   : 1 / 0
+Memória (Hits / Faults)   : 4 / 2
+Processos Concluídos      : 2 / 2
+Tempo Médio de Espera (WT): 0.00 ms
+Turnaround Médio (TAT)    : 5.00 ms
+Vazão (Throughput)        : 222.22 proc/s
+----------------------------------------------------------------------
+MÉTRICAS POR PROCESSO:
+PID   | Processo        | Estado     | Prio | CPU    | WT     | BLK    | TAT    | RT     | Hits/Faults
+--------------------------------------------------------------------------------------------
+100   | P1              | TERMINATED | 2    | 4   ms | 0   ms | 3   ms | 7ms    | 0ms    | 3/1
+  └─ TID 1   (main      ) [TERMINATED] CPU=4ms WT=0ms BLK=3ms TAT=7ms RT=0ms
+101   | P2              | TERMINATED | 3    | 2   ms | 0   ms | 0   ms | 3ms    | 1ms    | 1/1
+  └─ TID 2   (main      ) [TERMINATED] CPU=2ms WT=0ms BLK=0ms TAT=3ms RT=1ms
 ======================================================================
 ```

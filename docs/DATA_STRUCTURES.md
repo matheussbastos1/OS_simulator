@@ -1,6 +1,6 @@
 # CATÁLOGO DE ESTRUTURAS DE DADOS — OS SIMULATOR
 
-> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
+> **Status:** Especificação Oficial Consolidada (Etapa 5 — Processos, Threads, Escalonamento e Concorrência)  
 > **Objetivo:** Definir com rigor formal todas as entidades, classes, atributos tipados em Python, contratos de interface (Portas), adaptadores provisórios/definitivos e relacionamentos entre os subsistemas do simulador.
 
 ---
@@ -198,3 +198,75 @@ Para garantir transparência entre dados e sobrecarga estrutural:
 | **Subsistema** | `memory` / `storage` |
 | **Atributos** | • `total_slots: int` — Quantidade de slots de troca disponíveis.<br>• `slot_size: int` — Tamanho do slot (padrão: 4096 bytes).<br>• `slots_in_use: Dict[int, Tuple[int, int]]` — Mapeamento `slot_id -> (pid, logical_page)`.<br>• `block_device: BlockDevicePort` — Dispositivo de blocos onde o swap é persistido. |
 | **Responsabilidades** | Alocar e liberar slots de swap e coordenar operações de leitura/escrita de páginas descarregadas via `BlockDevicePort`. |
+
+---
+
+## 7. SUBSISTEMA DE PROCESSOS, THREADS, ESCALONAMENTO, CONCORRÊNCIA E MÉTRICAS (ETAPA 5)
+
+### 7.1. `LogicalClock` e `EventManager` (Infraestrutura Temporal Discreta)
+| Campo | Especificação |
+|---|---|
+| **Classes** | `LogicalClock` (`core.clock`), `SimulationEvent` e `EventManager` (`core.events`) |
+| **Atributos de `LogicalClock`** | • `now_ms: int` — Tempo lógico corrente em milissegundos inteiros (`>= 0`, monotônico).<br>• Métodos: `advance_by(delta_ms: int) -> int`, `advance_to(target_ms: int) -> int`, `reset(initial_ms: int = 0) -> None`, `to_dict() -> Dict[str, int]`. |
+| **Atributos de `SimulationEvent`** | • `timestamp_ms: int`, `priority: int`, `seq: int` (chave de ordenação `(timestamp_ms, priority, seq)`).<br>• `event_type: SimulationEventType` — Enum: `PROCESS_TERMINATED` (prio 0), `IO_COMPLETION` (1), `MUTEX_WAKEUP` (2), `SLEEP_WAKEUP` (2), `PROCESS_ARRIVAL` (3), `THREAD_ARRIVAL` (3), `QUANTUM_EXPIRE` (4), `SYSCALL_REQUEST` (5), `DISPATCH_RESCHEDULE` (6).<br>• `pid: Optional[int]`, `tid: Optional[int]`, `payload: Dict[str, Any]`, `cancelled: bool`. |
+| **Métodos de `EventManager`** | `schedule_at(...)`, `schedule(delay_ms, ...)`, `cancel_event(seq)`, `cancel_for_entity(pid=None, tid=None, event_types=None)`, `peek_next()`, `pop_next()`, `pop_ready_at(now_ms)`, `is_empty()`, `pending_events()`, `clear()`. |
+
+---
+
+### 7.2. `ProcessStateMachine` e `StateTransitionRecord`
+| Campo | Especificação |
+|---|---|
+| **Classes** | `ProcessStateMachine`, `StateTransitionRecord` (`process.state_machine`) |
+| **Enum `ProcessState`** | `NEW` (`NOVO`), `READY` (`PRONTO`), `RUNNING` (`EXECUTANDO`), `BLOCKED` (`BLOQUEADO`), `WAITING` (alias legado normalizado para `BLOCKED`), `TERMINATED` (`CONCLUIDO`). |
+| **Atributos de `StateTransitionRecord`** | • `entity_id: str` (ex.: `"TID:1"`, `"PID:100"`), `timestamp_ms: int`, `from_state: ProcessState`, `to_state: ProcessState`, `reason: str`. |
+| **Responsabilidades** | Validar transições do modelo de 5 estados (`VALID_TRANSITIONS`), rejeitar auto-transições ou transições ilegais com `InvalidStateTransitionException` e registrar o histórico auditável. |
+
+---
+
+### 7.3. `Process` (PCB Estendido), `SimulatedThread` e `WorkloadStep`
+| Campo | Especificação |
+|---|---|
+| **Classes** | `Process` (`process.pcb`), `SimulatedThread` e `WorkloadStep` / alias `SyscallSpec` (`process.thread`) |
+| **Novos Atributos de `Process`** | • Preserva todos os atributos da Etapa 4 (`pid`, `name`, `size_bytes`, `process_type`, `owner`, `state`, `page_table`, `segment_id`).<br>• Extensões Etapa 5: `priority: int` (padrão `3`, `>= 1`), `cpu_burst_ms: int` (padrão `0`), `arrival_time_ms: int` (padrão `0`), `io_profile: Any` (padrão `IOProfileType.NONE`), `memory_access_pattern: List[Tuple[int, bool]]`, `start_time_ms: Optional[int]`, `finish_time_ms: Optional[int]`, `threads: Dict[int, SimulatedThread]`, `thread_name_to_tid: Dict[str, int]`.<br>• Propriedades agregadas: `cpu_consumed_ms`, `remaining_burst_ms`, `total_wait_ms`, `total_blocked_ms`. |
+| **Atributos de `SimulatedThread`** | • `tid: int`, `pid: int`, `name: str`, `state: ProcessState`, `priority: int` (`>= 1`), `cpu_burst_ms: int`, `cpu_consumed_ms: int`, `quantum_used_ms: int`, `arrival_time_ms: int`, `start_time_ms: Optional[int]`, `finish_time_ms: Optional[int]`, `ready_since_ms: Optional[int]`, `total_wait_ms: int`, `total_blocked_ms: int`, `blocked_since_ms: Optional[int]`, `block_reason: BlockReason`, `blocked_on: Optional[str]`, `held_mutexes: List[str]`, `workload_steps: List[WorkloadStep]`, `memory_access_pattern: List[Tuple[int, bool]]`, `io_profile: Any`. |
+| **Atributos de `WorkloadStep`** | • `trigger_cpu_ms: int`, `syscall_type: SyscallType` (`IO_READ`, `IO_WRITE`, `FS_READ`, `FS_WRITE`, `SLEEP_WAIT`, `YIELD`, `MUTEX_LOCK`, `MUTEX_UNLOCK`, `MEMORY_LOAD`, `MEMORY_WRITE`, `EXIT`), `duration_ms: int`, `block_id: Optional[int]`, `path: Optional[str]`, `data: Optional[Union[bytes, str]]`, `mutex_name: Optional[str]`, `logical_page: Optional[int]`, `is_write: bool`, `executed: bool`, `status: str`, `result: Optional[Any]`. |
+
+---
+
+### 7.4. `PriorityRoundRobinScheduler`
+| Campo | Especificação |
+|---|---|
+| **Classe** | `PriorityRoundRobinScheduler` (`process.scheduler`) |
+| **Atributos** | • `process_manager: ProcessManager`, `quantum_ms: int` (padrão `4`), `context_switch_overhead_ms: int` (padrão `0`).<br>• `queues: Dict[int, Deque[int]]` — Filas FIFO indexadas por prioridade (`1..5` pré-criadas e expansão dinâmica para inteiros `>= 1`).<br>• `running_tid: Optional[int]`, `last_dispatched_tid: Optional[int]`.<br>• Contadores: `dispatches_total`, `context_switches_total`, `preemptions_total`, `quantum_expirations_total`. |
+| **Métodos Principais** | `enqueue_ready(thread, timestamp_ms)`, `select_next()`, `dispatch_next(timestamp_ms)`, `tick_quantum(delta_ms=1)`, `on_quantum_expired(timestamp_ms)`, `preempt_current(timestamp_ms, reason)`, `on_current_suspended()`, `remove(tid)`, `set_quantum(quantum_ms)`, `get_ready_queues()`, `get_stats()`, `format_queues()`, `reset()`. |
+
+---
+
+### 7.5. `IOProfile`, `BlockRecord`, `BlockRegistry` e `SyscallDispatcher`
+| Campo | Especificação |
+|---|---|
+| **Classes** | `IOProfile`, `BlockRecord`, `BlockRegistry`, `SyscallExecutionRecord`, `SyscallDispatcher` (`process.syscalls`) |
+| **Atributos de `IOProfile`** | • `profile_type: IOProfileType` (`NONE`, `FIXED`, `PERIODIC`, `RANDOM`).<br>• `interval_cpu_ms: Optional[int]`, `default_duration_ms: int` (`4`), `min_duration_ms: int` (`2`), `max_duration_ms: int` (`6`), `io_probability: float` (`0.25`), `max_random_events: int` (`3`), `seed: int` (`42`), `syscall_type: SyscallType` (`IO_READ`), `block_id: int` (`0`), `fixed_steps: List[WorkloadStep]`. |
+| **Atributos de `BlockRecord`** | • `tid: int`, `pid: int`, `thread_name: str`, `process_name: str`, `reason: BlockReason` (`IO_WAIT`, `FS_IO`, `SLEEP_WAIT`, `MUTEX_WAIT`), `resource_id: Optional[str]`, `blocked_at_ms: int`, `expected_unblock_at_ms: Optional[int]`, `unblocked_at_ms: Optional[int]`, `previous_state: ProcessState`, `next_state: Optional[ProcessState]`, `syscall_type: Optional[SyscallType]`. |
+| **Responsabilidades** | `SyscallDispatcher` verifica `check_due_syscalls(thread, now_ms)` estritamente por `cpu_consumed_ms`, despacha E/S via `IOManager`/`BlockDevicePort` e VFS via `FileSystemService` + `ExecutionContext`, registra bloqueios em `BlockRegistry` e agenda `IO_COMPLETION`/`SLEEP_WAKEUP`. |
+
+---
+
+### 7.6. `Mutex` e `SynchronizationManager`
+| Campo | Especificação |
+|---|---|
+| **Classes** | `Mutex`, `SynchronizationManager` (`process.sync`) |
+| **Atributos de `Mutex`** | • `name: str`, `locked: bool`, `owner_tid: Optional[int]`, `owner_pid: Optional[int]`, `wait_queue: Deque[int]` (fila FIFO de TIDs).<br>• Contadores e auditoria: `acquire_count: int`, `release_count: int`, `contention_count: int`, `history: List[Dict[str, Any]]`. |
+| **Métodos de `SynchronizationManager`** | `create_mutex(name)`, `get_mutex(name)`, `get_or_create_mutex(name)`, `list_mutexes()`, `acquire(mutex_name, thread_or_tid, timestamp_ms)`, `release(mutex_name, thread_or_tid, timestamp_ms)`, `release_all_for_thread(tid, timestamp_ms)`, `detect_deadlocks()`, `check_no_progress(has_ready, has_running, has_pending_events)`, `setup_buffer_video_scenario(...)`, `get_status()`, `format_status()`, `clear()`. |
+
+---
+
+### 7.7. `MetricsCollector`, `TimelineEntry`, `GanttSlice`, `FrameAccessRecord` e Relatórios
+| Campo | Especificação |
+|---|---|
+| **Classes** | `TimelineEntry`, `GanttSlice`, `FrameAccessRecord`, `ThreadMetrics`, `ProcessMetrics`, `SimulationMetrics`, `MetricsCollector` (`process.metrics`) |
+| **Atributos de `TimelineEntry`** | • `seq: int`, `timestamp_ms: int`, `event_type: str`, `pid: Optional[int]`, `tid: Optional[int]`, `process_name: str`, `thread_name: str`, `state: str`, `priority: Optional[int]`, `cpu_consumed_ms: int`, `quantum_used_ms: int`, `details: str`. |
+| **Atributos de `GanttSlice`** | • `start_ms: int`, `end_ms: int`, `pid: Optional[int]`, `tid: Optional[int]`, `process_name: str`, `thread_name: str`, `label: str` (`"EXEC"`, `"IDLE"`, etc.), `is_idle: bool`, propriedade `duration_ms`. |
+| **Atributos de `ThreadMetrics` / `ProcessMetrics`** | • `tid`/`pid`, `name`, `state`, `priority`, `cpu_burst_ms`, `arrival_time_ms`, `start_time_ms`, `finish_time_ms`, `cpu_time_ms`, `waiting_time_ms`, `blocked_time_ms`, `turnaround_time_ms`, `response_time_ms`, `syscalls_count`, `io_blocks_count`, `mutex_blocks_count`, `page_hits`, `page_faults` (`ProcessMetrics` inclui `process_type` e `thread_metrics: List[ThreadMetrics]`). |
+| **Atributos de `SimulationMetrics`** | • `total_simulation_ms`, `cpu_busy_ms`, `idle_time_ms`, `cpu_utilization_pct`, `context_switches_total`, `dispatches_total`, `preemptions_total`, `syscalls_total`, `io_blocks_total`, `mutex_blocks_total`, `page_hits_total`, `page_faults_total`, `avg_waiting_time_ms`, `avg_turnaround_time_ms`, `completed_processes`, `total_processes`, `throughput_per_sec`, `process_metrics`. |
+| **Resumo ao Vivo de Molduras** | `build_frames_summary(memory_manager, process_lookup=None, frame_records=None)` lê diretamente `memory_manager.physical_memory.frames` + `PageTableEntry`, retornando `frame_id`, `occupied`, `pid`, `logical_page`, `state` (`OCUPADA`/`LIVRE`), `last_event` (`HIT`/`PAGE_FAULT`/`N/A`), `last_access`, `dirty`, `referenced` e `algorithm`. |

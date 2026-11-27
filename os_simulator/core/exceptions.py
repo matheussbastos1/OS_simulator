@@ -1,6 +1,6 @@
 """Exception hierarchy for OS Simulator."""
 
-from typing import Optional
+from typing import List, Optional
 
 
 class OSSimulatorException(Exception):
@@ -161,6 +161,76 @@ class ProcessAlreadyExistsException(ProcessException):
 
 class InvalidProcessStateException(ProcessException):
     """Raised when an operation is invalid for current process state."""
+    pass
+
+
+class InvalidStateTransitionException(InvalidProcessStateException):
+    """Raised when an invalid process or thread state transition is attempted."""
+
+    def __init__(
+        self,
+        message: str,
+        from_state: Optional[str] = None,
+        to_state: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        code: Optional[str] = None,
+    ):
+        super().__init__(message, code=code)
+        self.from_state = from_state
+        self.to_state = to_state
+        self.entity_id = entity_id
+
+
+class ThreadNotFoundException(ProcessException):
+    """Raised when a simulated thread TID or name cannot be located."""
+    pass
+
+
+class ThreadAlreadyExistsException(ProcessException):
+    """Raised when attempting to create a duplicate thread within a process."""
+    pass
+
+
+class SchedulerException(ProcessException):
+    """Raised on CPU scheduler configuration or dispatch errors."""
+    pass
+
+
+class SynchronizationException(ProcessException):
+    """Base class for concurrency and mutex synchronization errors."""
+    pass
+
+
+class MutexNotFoundException(SynchronizationException):
+    """Raised when a requested mutex does not exist."""
+    pass
+
+
+class MutexAlreadyExistsException(SynchronizationException):
+    """Raised when attempting to create a mutex that already exists."""
+    pass
+
+
+class MutexOwnershipException(SynchronizationException):
+    """Raised when a thread attempts to unlock a mutex it does not own."""
+    pass
+
+
+class DeadlockDetectedException(SynchronizationException):
+    """Raised when a circular Wait-For Graph deadlock cycle is detected."""
+
+    def __init__(
+        self,
+        message: str,
+        cycle: Optional[List[str]] = None,
+        code: Optional[str] = None,
+    ):
+        super().__init__(message, code=code or "DEADLOCK_DETECTED")
+        self.cycle: List[str] = list(cycle) if cycle is not None else []
+
+
+class SimulationStallException(ProcessException):
+    """Raised when active threads are blocked with no pending wakeup or ready events."""
     pass
 
 

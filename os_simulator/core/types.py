@@ -53,11 +53,49 @@ class ProcessType(str, Enum):
 
 
 class ProcessState(str, Enum):
-    """Lifecycle states of a simulated process."""
+    """Lifecycle states of a simulated process or thread."""
+    NEW = "NEW"
     READY = "READY"
     RUNNING = "RUNNING"
+    BLOCKED = "BLOCKED"
     WAITING = "WAITING"
     TERMINATED = "TERMINATED"
+
+    # Aliases for Portuguese academic terms
+    NOVO = "NEW"
+    PRONTO = "READY"
+    EXECUTANDO = "RUNNING"
+    BLOQUEADO = "BLOCKED"
+    CONCLUIDO = "TERMINATED"
+
+    @classmethod
+    def normalize(cls, state: "ProcessState") -> "ProcessState":
+        """Normalize legacy WAITING alias to BLOCKED for Stage 5 state machine."""
+        if state == cls.WAITING:
+            return cls.BLOCKED
+        return state
+
+    @classmethod
+    def from_string(cls, value: str) -> "ProcessState":
+        """Parse string to ProcessState enum (supports English and Portuguese names)."""
+        norm = value.strip().upper()
+        mapping = {
+            "NEW": cls.NEW,
+            "NOVO": cls.NEW,
+            "READY": cls.READY,
+            "PRONTO": cls.READY,
+            "RUNNING": cls.RUNNING,
+            "EXECUTANDO": cls.RUNNING,
+            "BLOCKED": cls.BLOCKED,
+            "BLOQUEADO": cls.BLOCKED,
+            "WAITING": cls.WAITING,
+            "TERMINATED": cls.TERMINATED,
+            "CONCLUIDO": cls.TERMINATED,
+            "CONCLUÍDO": cls.TERMINATED,
+        }
+        if norm in mapping:
+            return mapping[norm]
+        raise ValueError(f"Estado de processo inválido: '{value}'")
 
 
 class SegmentStatus(str, Enum):
@@ -103,6 +141,10 @@ class AuditEventType(str, Enum):
     USER_MANAGEMENT = "USER_MANAGEMENT"
     TAMPER_DETECTED = "TAMPER_DETECTED"
     CRYPTO_OPERATION = "CRYPTO_OPERATION"
+    PROCESS_LIFECYCLE = "PROCESS_LIFECYCLE"
+    SYSCALL_EXECUTED = "SYSCALL_EXECUTED"
+    MUTEX_EVENT = "MUTEX_EVENT"
+    DEADLOCK_DETECTED = "DEADLOCK_DETECTED"
 
 
 class FileScanStatus(str, Enum):
@@ -112,3 +154,68 @@ class FileScanStatus(str, Enum):
     MODIFIED = "MODIFIED"
     SUSPICIOUS = "SUSPICIOUS"
     INACCESSIBLE = "INACCESSIBLE"
+
+
+class SimulationEventType(str, Enum):
+    """Discrete-event types processed by the Stage 5 simulation event loop."""
+    PROCESS_TERMINATED = "PROCESS_TERMINATED"
+    IO_COMPLETION = "IO_COMPLETION"
+    MUTEX_WAKEUP = "MUTEX_WAKEUP"
+    SLEEP_WAKEUP = "SLEEP_WAKEUP"
+    PROCESS_ARRIVAL = "PROCESS_ARRIVAL"
+    THREAD_ARRIVAL = "THREAD_ARRIVAL"
+    QUANTUM_EXPIRE = "QUANTUM_EXPIRE"
+    SYSCALL_REQUEST = "SYSCALL_REQUEST"
+    DISPATCH_RESCHEDULE = "DISPATCH_RESCHEDULE"
+
+
+class SyscallType(str, Enum):
+    """Simulated system calls dispatched by threads during execution."""
+    IO_READ = "IO_READ"
+    IO_WRITE = "IO_WRITE"
+    FS_READ = "FS_READ"
+    FS_WRITE = "FS_WRITE"
+    SLEEP_WAIT = "SLEEP_WAIT"
+    YIELD = "YIELD"
+    MUTEX_LOCK = "MUTEX_LOCK"
+    MUTEX_UNLOCK = "MUTEX_UNLOCK"
+    MEMORY_LOAD = "MEMORY_LOAD"
+    MEMORY_WRITE = "MEMORY_WRITE"
+    EXIT = "EXIT"
+
+    @classmethod
+    def from_string(cls, value: str) -> "SyscallType":
+        """Parse string to SyscallType enum."""
+        norm = value.strip().upper().replace("-", "_")
+        if norm == "SLEEP":
+            return cls.SLEEP_WAIT
+        try:
+            return cls(norm)
+        except ValueError as exc:
+            raise ValueError(f"Tipo de syscall inválido: '{value}'") from exc
+
+
+class IOProfileType(str, Enum):
+    """Thread I/O generation profile modes."""
+    NONE = "NONE"
+    FIXED = "FIXED"
+    PERIODIC = "PERIODIC"
+    RANDOM = "RANDOM"
+
+    @classmethod
+    def from_string(cls, value: str) -> "IOProfileType":
+        """Parse string to IOProfileType enum."""
+        norm = value.strip().upper()
+        try:
+            return cls(norm)
+        except ValueError as exc:
+            raise ValueError(f"Perfil de E/S inválido: '{value}'. Opções: none, fixed, periodic, random.") from exc
+
+
+class BlockReason(str, Enum):
+    """Reasons why a simulated thread transitions to BLOCKED."""
+    NONE = "NONE"
+    IO_WAIT = "IO_WAIT"
+    FS_IO = "FS_IO"
+    SLEEP_WAIT = "SLEEP_WAIT"
+    MUTEX_WAIT = "MUTEX_WAIT"

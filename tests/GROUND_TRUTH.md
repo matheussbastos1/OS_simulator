@@ -1,7 +1,7 @@
 # MATRIZ OFICIAL DE GROUND TRUTH E TESTES DETERMINÍSTICOS — OS SIMULATOR
 
-> **Status:** Especificação Oficial Consolidada (Fase 0.1)  
-> **Objetivo:** Estabelecer a verdade fundamental (*ground truth*) e os critérios exatos de aceitação para os testes de integração e unitários das quatro etapas do simulador, preservando integralmente os exemplos oficiais do professor e formalizando cenários complementares de validação.
+> **Status:** Especificação Oficial Consolidada (Etapa 5 — Processos, Threads, Escalonamento e Concorrência)  
+> **Objetivo:** Estabelecer a verdade fundamental (*ground truth*) e os critérios exatos de aceitação para os testes de integração e unitários das cinco etapas do simulador, preservando integralmente os exemplos oficiais e formalizando cenários determinísticos de validação.
 
 ---
 
@@ -286,3 +286,70 @@
   - Página 2 gera Page Fault. Origem identificada: `SWAP_STORAGE` no slot 0.
   - Uma moldura é liberada e os dados da Página 2 são **lidos deterministicamente do Swap simulado via `BlockDevicePort`**, restaurando o conteúdo original modificado e liberando o slot 0.
 - **Critério de Aprovação:** O ciclo valida de forma 100% determinística o descarte sem I/O de páginas limpas, a inicialização sem Swap de páginas virgens, a gravação de páginas sujas no Swap e a recuperação posterior via `swap_in`.
+
+---
+
+## 5. CENÁRIOS DA ETAPA 5 — PROCESSOS, THREADS, ESCALONAMENTO E CONCORRÊNCIA
+
+### Cenário PROC-001: Escalonamento por Prioridade, Preempção Cruzada e Round-Robin
+- **Identificador:** `PROC-001`
+- **Etapa:** 5 (Escalonamento de CPU)
+- **Parte A — Preempção por Prioridade:**
+  - `sched_config --quantum 4`
+  - `LowOnly` (`priority=4, cpu_burst_ms=6, arrival_time_ms=0`) e `Urgent` (`priority=1, cpu_burst_ms=3, arrival_time_ms=2`).
+  - **Resultado Esperado:** `LowOnly` executa `[0..2]`; em `t=2`, `Urgent` chega com prioridade `1 < 4`, preemptando `LowOnly` (`preemptions_total == 1`), executando `[2..5]`; `LowOnly` retoma com quantum zerado e conclui em `[5..9]`. Gantt: `[("LowOnly", 0, 2), ("Urgent", 2, 5), ("LowOnly", 5, 9)]`.
+- **Parte B — Rotação Round-Robin (`quantum_ms=2`):**
+  - Processos de mesma prioridade (`priority=2`): `A` (`burst=5`), `B` (`burst=4`), `C` (`burst=2`), todos em `arrival_time_ms=0`.
+  - **Resultado Esperado:** Gantt exato `A[0..2], B[2..4], C[4..6], A[6..8], B[8..10], A[10..11]`, com `dispatches_total == 6`, `context_switches_total == 5`, `finish_time_ms` iguais a `11` (`A`), `10` (`B`) e `6` (`C`).
+- **Critério de Aprovação:** Validado por `test_scenario_c_priority_scheduling_and_dynamic_preemption` e `test_scenario_d_round_robin_quantum_and_context_switches` em `tests/test_process_memory_integration.py`.
+
+---
+
+### Cenário PROC-002: Syscalls Acionadas por Tempo de CPU (`cpu_consumed_ms`), E/S e ACLs
+- **Identificador:** `PROC-002`
+- **Etapa:** 5 (Syscalls e E/S)
+- **Preparação do Estado:** `Hog` (`priority=1, burst=6`) e `Worker` (`priority=3, burst=5`) com syscalls agendadas em `Worker`: `YIELD` em `trigger_cpu_ms=0`, `IO_READ` (`duration=4, block_id=12`) em `trigger_cpu_ms=2` e `FS_READ` (`duration=2, path="/dados.txt"`) em `trigger_cpu_ms=4`.
+- **Resultado Esperado:**
+  - Em `t=6` (`step(6)`), `Hog` conclui e `Worker.cpu_consumed_ms == 0`: `IO_READ` **não** disparou pelo relógio global.
+  - Em `t=8` (`step(2)`), `Worker` consumiu 2 ms de CPU, disparou `YIELD@0` e `IO_READ@2`, transicionou `RUNNING -> BLOCKED (IO_WAIT)` e incrementou `io_manager.total_reads` em `+1`.
+  - Após `run()`, `Worker` desbloqueia em `t=12`, bloqueia em `FS_READ@4` (`[14..16]`), conclui em `t=17` com `total_blocked_ms == 6` e `fs_step.result == "VFS_INTACTO"`. Acesso a arquivo restrito (`chmod 600`) por usuário sem permissão lança `PermissionDeniedException`.
+- **Critério de Aprovação:** Validado por `test_scenario_e_cpu_triggered_syscalls_vs_global_clock_and_io_fs`.
+
+---
+
+### Cenário PROC-003: Exclusão Mútua em Contenção (`Buffer_Video`) e Limpeza no Encerramento
+- **Identificador:** `PROC-003`
+- **Etapa:** 5 (Concorrência e Mutexes)
+- **Comandos Executados:**
+  ```text
+  mutex_demo --scenario buffer_video --quantum 2
+  ```
+- **Preparação:** Processo `Player_Video` (`priority=2, size=8192`) com threads `T1` e `T2` (`burst=8 ms` cada), cada qual executando `MUTEX_LOCK("Buffer_Video")` em `cpu=1 ms` e `MUTEX_UNLOCK("Buffer_Video")` em `cpu=6 ms`.
+- **Resultado Esperado:**
+  - `critical_sections_disjoint == True` (nunca há dois donos simultâneos na seção crítica).
+  - `mutex.locked == False`, `acquire_count == 2`, `release_count == 2`, `contention_count >= 1`.
+  - `T1`, `T2` e `Player_Video` terminam em `TERMINATED` e todas as molduras de memória são liberadas.
+- **Critério de Aprovação:** Validado por `test_scenario_h_buffer_video_mutex_contention_and_termination_cleanup` e `test_mutex_buffer_video_manual_lock_unlock_and_terminate_cleanup`.
+
+---
+
+### Cenário PROC-004: Detecção de Deadlock por Grafo Wait-For e Estagnação (*Stall*)
+- **Identificador:** `PROC-004`
+- **Etapa:** 5 (Deadlock e No-Progress)
+- **Preparação do Estado:** `quantum_ms=1`, mutexes `M1` e `M2`, `ProcA` (`MUTEX_LOCK M1 @ cpu=0`, `MUTEX_LOCK M2 @ cpu=2`) e `ProcB` (`MUTEX_LOCK M2 @ cpu=0`, `MUTEX_LOCK M1 @ cpu=2`).
+- **Resultado Esperado:**
+  - `ProcA` adquire `M1` em `[0..1]`; `ProcB` adquire `M2` em `[1..2]`; `ProcA` bloqueia em `M2` em `[2..3]`; ao `ProcB` tentar `M1` em `[3..4]`, o Grafo Wait-For detecta o ciclo `ProcA -> M2 -> ProcB -> M1 -> ProcA` e lança `DeadlockDetectedException` sem loop infinito.
+  - Em cenário separado com thread bloqueada em `IO_READ` cujo evento de conclusão foi cancelado, `deadlock_check` e `sched_run` detectam estagnação (`SimulationStallException`).
+- **Critério de Aprovação:** Validado por `test_scenario_i_circular_deadlock_and_stall_detection_no_infinite_loop` e `test_deadlock_detection_and_stall_diagnostics_via_cli`.
+
+---
+
+### Cenário PROC-005: Execução Acoplada à Memória Virtual (LRU, Swap e Invariantes de Métricas)
+- **Identificador:** `PROC-005`
+- **Etapa:** 5 (Integração com Etapa 4 e Métricas)
+- **Preparação do Estado:** `dynamic_frames=2`, `page_size=4096`, política `LRU`, processo `MemApp` (`16 KB` = 4 páginas, `cpu_burst_ms=7`) com padrão `[(0, False), (1, False), (0, True), (2, False), (3, False), (0, False), (0, False)]`.
+- **Resultado Esperado:**
+  - Após `step(6)`: `page_faults_total == 5` (`process_image=1`, `zero_fill=3`, `swap=1`), `swap_outs_total == 1`, `swap_ins_total == 1`, `evictions_clean == 2`, `evictions_dirty == 1`, e `memory_frames` reporta Moldura `0` (Página `3`, `PAGE_FAULT`) e Moldura `1` (Página `0`, `PAGE_FAULT`).
+  - Após `step(1)`: `MemApp` conclui (`TERMINATED`), molduras ocupadas retornam a `0`, slots de swap usados retornam a `0`, `page_hits_total == 2`, `page_faults_total == 5`.
+  - Invariantes globais e por processo: $\text{TAT} = \text{CPU} + \text{WT} + \text{BLK}$, $\text{cpu\_busy\_ms} + \text{idle\_time\_ms} = \text{total\_simulation\_ms}$, com `Nucleo_Base` (PID 0) excluído das estatísticas de processos de usuário.
+- **Critério de Aprovação:** Validado por `test_scenario_g_real_stage4_ram_lru_second_chance_swap_and_frames_summary` e `test_scenario_j_metrics_mathematical_invariants`.

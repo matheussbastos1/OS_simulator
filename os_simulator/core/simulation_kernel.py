@@ -2,7 +2,9 @@
 
 from typing import Any, Dict, Optional
 
+from os_simulator.core.clock import LogicalClock
 from os_simulator.core.context import ExecutionContext
+from os_simulator.core.events import EventManager
 from os_simulator.core.ports import AuthorizationPort, BlockDevicePort, BootstrapSecurityPolicy
 from os_simulator.core.types import AllocationStrategy
 from os_simulator.filesystem.service import FileSystemService
@@ -10,7 +12,12 @@ from os_simulator.io.scheduler import DiskScheduler, SSTFScheduler
 from os_simulator.io.service import IOManager
 from os_simulator.io.ssd import SSDDevice
 from os_simulator.memory.service import MemoryManager
+from os_simulator.process.engine import ExecutionEngine
 from os_simulator.process.manager import ProcessManager
+from os_simulator.process.metrics import MetricsCollector
+from os_simulator.process.scheduler import PriorityRoundRobinScheduler
+from os_simulator.process.sync import SynchronizationManager
+from os_simulator.process.syscalls import SyscallDispatcher
 from os_simulator.security.audit import AuditLog
 from os_simulator.security.auth import AuthenticationService
 from os_simulator.security.integrity import AntivirusScanner, BaselineCatalog, IntegrityChecker
@@ -41,6 +48,8 @@ class SimulationKernel:
         memory_manager: Optional[MemoryManager] = None,
         reserved_memory_kb: int = 4096,
         dynamic_frames: int = 16,
+        quantum_ms: int = 4,
+        default_seed: int = 42,
     ):
         self.context = ExecutionContext()
         self.kernel_secret = kernel_secret or b"os_simulator_kernel_secret_key_32!!"
@@ -131,6 +140,46 @@ class SimulationKernel:
             audit_log=self.audit_log,
             checker=self.integrity_checker,
             kernel_secret=self.kernel_secret,
+        )
+
+        # Stage 5: Process execution, CPU scheduling, concurrency, and metrics
+        self.clock = LogicalClock()
+        self.event_manager = EventManager(clock=self.clock)
+        self.cpu_scheduler = PriorityRoundRobinScheduler(
+            self.process_manager,
+            quantum_ms=quantum_ms,
+        )
+        self.sync_manager = SynchronizationManager(self.process_manager)
+        self.metrics_collector = MetricsCollector()
+        self.syscall_dispatcher = SyscallDispatcher(
+            process_manager=self.process_manager,
+            event_manager=self.event_manager,
+            io_manager=self.io_manager,
+            block_device=self.device,
+            fs_service=self.fs_service,
+            auth_context=self.context,
+            default_seed=default_seed,
+            audit_log=self.audit_log,
+        )
+        self.execution_engine = ExecutionEngine(
+            process_manager=self.process_manager,
+            memory_manager=self.memory_manager,
+            clock=self.clock,
+            event_manager=self.event_manager,
+            cpu_scheduler=self.cpu_scheduler,
+            sync_manager=self.sync_manager,
+            syscall_dispatcher=self.syscall_dispatcher,
+            metrics_collector=self.metrics_collector,
+            io_manager=self.io_manager,
+            block_device=self.device,
+            fs_service=self.fs_service,
+            auth_port=self.auth,
+            auth_context=self.context,
+            audit_log=self.audit_log,
+            quantum_ms=quantum_ms,
+            default_seed=default_seed,
+            context_provider=lambda: self.context,
+            storage_provider=lambda: (self.io_manager, self.device, self.fs_service),
         )
         self.is_running = True
 

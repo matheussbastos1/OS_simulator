@@ -15,6 +15,7 @@
   - `feature/etapa-2-io-raid`: Gerenciamento de E/S, escalonamento de disco e controladores RAID (Fase 2).
   - `feature/etapa-3-security`: Autenticação, controle de acesso ACL, anéis de privilégio e criptografia (Fase 3).
   - `feature/etapa-4-memory`: Memória reservada, paginação virtual, MMU, substituição e Swap (Fase 4).
+  - `feat/etapa-5-processos-concorrencia`: Processos, threads, escalonamento Prioridade+RR, syscalls, mutex/deadlock e métricas (Fase 5).
 
 ### Regra de Transição entre Etapas
 Cada etapa segue rigorosamente:
@@ -182,6 +183,24 @@ Cada etapa segue rigorosamente:
 
 ---
 
+### Fase 5 — Gerenciamento de Processos, Threads, Escalonamento, Syscalls e Concorrência
+**Branch:** `feat/etapa-5-processos-concorrencia`  
+**Objetivo:** Implementar simulação determinística a eventos discretos de processos e threads (`LogicalClock`, `EventManager`, `ProcessStateMachine`, `SimulatedThread`, `WorkloadStep`), escalonador preemptivo multinível por prioridade + Round-Robin (`PriorityRoundRobinScheduler`), despacho de syscalls por tempo de CPU e perfis de E/S (`SyscallDispatcher`, `IOProfile`, `BlockRegistry`), sincronização por mutex FIFO e detecção de deadlock/estagnação (`SynchronizationManager`), integração com a memória virtual da Etapa 4 (`ExecutionEngine`), métricas/Gantt/timeline (`MetricsCollector`) e comandos completos na CLI.
+
+- [x] Implementar relógio lógico em milissegundos inteiros (`LogicalClock`) e fila de eventos discretos (`EventManager`) com chave determinística `(timestamp_ms, priority, seq)`.
+- [x] Implementar máquina de 5 estados (`ProcessStateMachine`) com normalização `WAITING -> BLOCKED` e sincronização agregada de estado do processo pai.
+- [x] Estender `Process` (PCB) e implementar `SimulatedThread` e `WorkloadStep` preservando compatibilidade retroativa da Etapa 4.
+- [x] Implementar `PriorityRoundRobinScheduler` com preempção cruzada de prioridade, rotação por quantum e contagem exata de trocas de contexto.
+- [x] Implementar `SyscallDispatcher`, `IOProfile` (`NONE`, `FIXED`, `PERIODIC`, `RANDOM` determinístico por thread) e `BlockRegistry` integrados ao `IOManager` e `FileSystemService` (com ACLs).
+- [x] Implementar `SynchronizationManager` e `Mutex` com fila FIFO, handoff imediato, cenário `Buffer_Video`, Grafo Wait-For (`detect_deadlocks`) e diagnóstico de estagnação (`check_no_progress`).
+- [x] Implementar `MetricsCollector` com `TimelineEntry`, `GanttSlice`, `build_frames_summary` e métricas matemáticas (`WT`, `TAT`, `RT`, utilização de CPU, vazão).
+- [x] Implementar `ExecutionEngine` e integrá-lo ao `SimulationKernel` (com acoplamento à paginação/swap da Etapa 4).
+- [x] Implementar comandos da CLI da Etapa 5 (`ps`/`process_status`, `process_admit`, `thread_create`, `thread_status`, `sched_config`, `sched_status`, `sched_step`, `sched_run`, `process_syscall`, `mutex_*`, `deadlock_check`, `memory_frames`, `sim_metrics`, `sim_timeline`, `sim_reset`) e flags retrocompatíveis em `create_process`.
+- [x] Validar suíte completa de testes unitários e de integração (`python -m unittest discover -s tests -p "test_*.py"` — 274/274 testes aprovados) e cenários `PROC-001` a `PROC-005` do `tests/GROUND_TRUTH.md`.
+- [x] Atualizar documentação arquitetural, estruturas de dados, algoritmos, dicionário da CLI, Ground Truth, roadmap e README.
+
+---
+
 ## CONTROLE DE VERSÕES E RELEASES
 
 | Versão | Fase | Descrição | Status |
@@ -192,3 +211,4 @@ Cada etapa segue rigorosamente:
 | `v0.3.0` | Fase 2 | E/S, Escalonamento de Disco e Arranjos RAID | Concluído (Pronto para Homologação) |
 | `v0.4.0` | Fase 3 | Segurança, Autenticação, ACLs e Criptografia AES-256-GCM | Concluído (Homologado 100%) |
 | `v1.0.0` | Fase 4 | Gerenciamento de Memória, Paginação, Swap e Integração Global | Concluído (Homologado 100%) |
+| `v1.1.0` | Fase 5 | Processos, Threads, Escalonamento Prioridade+RR, Syscalls, Mutex/Deadlock e Métricas | Concluído (Homologado 100%) |
